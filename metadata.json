@@ -1,0 +1,6 @@
+{
+  "name": "ThermoSync IoT — Universal Smart AC Controller",
+  "description": "Sistem Kontrol & Monitoring AC Universal Berbasis IoT (ESP32 + Next.js) dengan 3-Tier Automatic Device Scanner, Hybrid IR Sync, dan Telemetri DHT22 Realtime.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

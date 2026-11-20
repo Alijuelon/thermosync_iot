@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="ts-bg" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0284C7" />
+      <stop offset="50%" stop-color="#0EA5E9" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+    <linearGradient id="ts-glow" x1="16" y1="12" x2="48" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E0F2FE" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#ts-bg)" />
+  <rect x="5.5" y="5.5" width="53" height="53" rx="14.5" stroke="#BAE6FD" stroke-opacity="0.35" stroke-width="1.5" />
+  <!-- Snowflake / Smart Climate Core -->
+  <g stroke="url(#ts-glow)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="32" y1="14" x2="32" y2="50" />
+    <line x1="16.4" y1="23" x2="47.6" y2="41" />
+    <line x1="47.6" y1="23" x2="16.4" y2="41" />
+    <!-- Snowflake branches -->
+    <polyline points="27,18 32,22 37,18" />
+    <polyline points="27,46 32,42 37,46" />
+    <polyline points="18,29.5 23.5,27 21.5,21.5" />
+    <polyline points="42.5,42.5 40.5,37 46,34.5" />
+    <polyline points="46,29.5 40.5,27 42.5,21.5" />
+    <polyline points="21.5,42.5 23.5,37 18,34.5" />
+  </g>
+  <circle cx="32" cy="32" r="4.5" fill="#0284C7" stroke="#FFFFFF" stroke-width="3" />
+</svg>
