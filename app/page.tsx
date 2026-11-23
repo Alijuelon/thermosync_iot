@@ -40,6 +40,7 @@ import {
   hasMultipleActiveChannels,
   hasPzemReading,
   formatPzemPower,
+  evaluateRssiStatus,
   IR_PROTOCOL_CATALOG,
   type ESP32Node,
   type ACAppliance,
@@ -81,6 +82,9 @@ export default function ThermoSyncApp() {
   const [bulkQueueStatus, setBulkQueueStatus] = useState<
     Record<string, { step: number; total: number }>
   >({});
+  const [resettingEnergyNodeId, setResettingEnergyNodeId] = useState<string | null>(
+    null
+  );
 
   const [syncState, setSyncState] = useState<{
     status: 'idle' | 'sending' | 'confirmed' | 'remote_synced' | 'timeout_error';
@@ -155,6 +159,20 @@ export default function ThermoSyncApp() {
             .on(
               'postgres_changes',
               { event: '*', schema: 'public', table: 'esp32_nodes' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'device_nodes' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: 'INSERT', schema: 'public', table: 'telemetry_logs' },
               () => {
                 void loadFromBackend();
               }
@@ -411,6 +429,41 @@ export default function ThermoSyncApp() {
       })
     );
     showToast('success', 'Smart Hub kembali Online.');
+  };
+
+  const handleResetEnergyNode = async (node: ESP32Node) => {
+    setResettingEnergyNodeId(node.id);
+    try {
+      const res = await fetch('/api/iot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'hardware_command',
+          esp32Id: node.id,
+          esp32Name: node.name,
+          firmwareCommand: 'reset_energy',
+        }),
+      });
+      const json = await res.json();
+      if (json?.ok) {
+        if (json.command) {
+          setCommands((prev) => [json.command, ...prev]);
+        }
+        showToast(
+          'success',
+          `Perintah Reset kWh dikirim ke ${node.name}. Menunggu eksekusi ESP8266.`
+        );
+      } else {
+        showToast(
+          'error',
+          json?.error || 'Gagal mengirim perintah Reset kWh ke Supabase.'
+        );
+      }
+    } catch {
+      showToast('error', 'Koneksi terputus saat mengirim Reset kWh.');
+    } finally {
+      setResettingEnergyNodeId(null);
+    }
   };
 
   const handleToggleEsp32OnlineStatus = (esp32Id: string) => {
@@ -928,7 +981,7 @@ export default function ThermoSyncApp() {
                       >
                         {/* Card Header: Room Name, Status Pill, Temp & Humidity, Bulk Power ON/OFF, and Full-Width Sparkline */}
                         <div className="flex flex-col gap-4 pb-4 border-b border-slate-100 dark:border-zinc-800/80">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex flex-col gap-3.5">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2.5">
                                 <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-50 truncate">
@@ -949,39 +1002,66 @@ export default function ThermoSyncApp() {
                                   <span>{online ? 'Online' : 'Offline'}</span>
                                 </span>
                               </div>
-                              <p className="text-xs text-slate-500 dark:text-zinc-400 truncate mt-0.5">
-                                {node.roomLabel} ·{' '}
-                                {formatLastSeenLabel(node.lastSeen, nowMs)}
+                              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                                <span>{node.roomLabel}</span>
+                                {node.wifiSsid && (
+                                  <>
+                                    <span aria-hidden="true">·</span>
+                                    <span className="font-mono text-[11px] text-slate-600 dark:text-zinc-300">
+                                      WiFi {node.wifiSsid}
+                                      {typeof node.rssi === 'number'
+                                        ? ` (${node.rssi} dBm · ${evaluateRssiStatus(node.rssi).label})`
+                                        : ''}
+                                    </span>
+                                  </>
+                                )}
+                                {node.ipAddress && (
+                                  <>
+                                    <span aria-hidden="true">·</span>
+                                    <span className="font-mono text-[11px]">
+                                      {node.ipAddress}
+                                    </span>
+                                  </>
+                                )}
+                                <span aria-hidden="true">·</span>
+                                <span>{formatLastSeenLabel(node.lastSeen, nowMs)}</span>
                               </p>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2.5">
+                            {/* Prominent Real-Time Sensor Bar & Large Master AC Controls */}
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                               {/* Real-time Room Sensor Bar: Temp (°C), Humidity (%), & Active Power (W/kW) */}
-                              <div className="inline-flex items-center gap-2.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200/80 dark:border-zinc-800 px-3.5 py-1.5 font-mono tabular-nums text-xs">
-                                <span className="inline-flex items-center gap-1 font-bold text-slate-900 dark:text-zinc-100">
-                                  <Thermometer className="w-3.5 h-3.5 text-sky-500" />
+                              <div
+                                className={`w-full lg:w-auto grid ${
+                                  hasPzemReading(node.pzem) ? 'grid-cols-3' : 'grid-cols-2'
+                                } sm:inline-flex items-center divide-x divide-slate-200 dark:divide-zinc-800 sm:divide-x-0 sm:gap-5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200/80 dark:border-zinc-800 py-3 sm:px-6 sm:py-3.5 font-mono tabular-nums`}
+                              >
+                                <span className="inline-flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-2 sm:px-0 font-bold text-lg sm:text-3xl tracking-tight text-slate-900 dark:text-zinc-50 whitespace-nowrap">
+                                  <Thermometer className="w-4 h-4 sm:w-6 sm:h-6 text-sky-500 shrink-0" />
                                   <span>
                                     {node.temperature > 0
                                       ? `${node.temperature.toFixed(1)}°C`
                                       : '--°C'}
                                   </span>
                                 </span>
-                                <span className="text-slate-300 dark:text-zinc-700">
-                                  |
-                                </span>
-                                <span className="inline-flex items-center gap-1 text-slate-600 dark:text-zinc-300">
-                                  <Droplets className="w-3.5 h-3.5 text-sky-400" />
+                                <span
+                                  aria-hidden="true"
+                                  className="hidden sm:block h-7 w-px bg-slate-200 dark:bg-zinc-800"
+                                />
+                                <span className="inline-flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-2 sm:px-0 font-bold text-lg sm:text-3xl tracking-tight text-slate-700 dark:text-zinc-200 whitespace-nowrap">
+                                  <Droplets className="w-4 h-4 sm:w-6 sm:h-6 text-sky-400 shrink-0" />
                                   <span>
                                     {node.humidity > 0 ? `${node.humidity}%` : '--%'}
                                   </span>
                                 </span>
                                 {hasPzemReading(node.pzem) && (
                                   <>
-                                    <span className="text-slate-300 dark:text-zinc-700">
-                                      |
-                                    </span>
-                                    <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400">
-                                      <Zap className="w-3.5 h-3.5 text-amber-500" />
+                                    <span
+                                      aria-hidden="true"
+                                      className="hidden sm:block h-7 w-px bg-slate-200 dark:bg-zinc-800"
+                                    />
+                                    <span className="inline-flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 px-2 sm:px-0 font-bold text-lg sm:text-3xl tracking-tight text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                      <Zap className="w-4 h-4 sm:w-6 sm:h-6 text-amber-500 shrink-0" />
                                       <span>
                                         {formatPzemPower(node.pzem?.power).value}{' '}
                                         {formatPzemPower(node.pzem?.power).unit}
@@ -995,44 +1075,46 @@ export default function ThermoSyncApp() {
                                 <button
                                   type="button"
                                   onClick={() => handleSimulateHeartbeat(node.id)}
-                                  className="h-9 rounded-xl bg-sky-500 hover:bg-sky-400 text-white px-3.5 text-xs font-bold transition-colors"
+                                  className="h-12 sm:h-14 w-full sm:w-auto rounded-2xl bg-sky-500 hover:bg-sky-400 text-white px-6 text-sm sm:text-base font-bold transition-colors shadow-xs"
                                 >
                                   Pulihkan Koneksi
                                 </button>
                               ) : isConfirmingBulkOff ? (
-                                <div className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs">
+                                <div className="min-h-[48px] sm:min-h-[56px] flex flex-wrap items-center justify-between sm:justify-start gap-2.5 rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm">
                                   <span className="font-semibold text-rose-700 dark:text-rose-300">
                                     Matikan {activeHubAcs.length} AC?
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleBulkPowerHub(node.id, false)
-                                    }
-                                    className="min-h-[28px] rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-2.5 font-bold"
-                                  >
-                                    Ya
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmBulkOffHubId(null)}
-                                    className="min-h-[28px] rounded-lg border border-slate-300 dark:border-zinc-700 px-2 font-medium"
-                                  >
-                                    Batal
-                                  </button>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleBulkPowerHub(node.id, false)
+                                      }
+                                      className="h-9 rounded-xl bg-rose-600 hover:bg-rose-500 text-white px-4 font-bold"
+                                    >
+                                      Ya
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmBulkOffHubId(null)}
+                                      className="h-9 rounded-xl border border-slate-300 dark:border-zinc-700 px-3.5 font-medium"
+                                    >
+                                      Batal
+                                    </button>
+                                  </div>
                                 </div>
                               ) : (
-                                <div className="flex items-center gap-1.5">
+                                <div className="grid grid-cols-2 sm:flex items-center gap-2.5 w-full lg:w-auto">
                                   <button
                                     type="button"
                                     disabled={inactiveHubAcs.length === 0}
                                     onClick={() =>
                                       handleBulkPowerHub(node.id, true)
                                     }
-                                    className="h-9 inline-flex items-center gap-1 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:border-emerald-500/40 hover:text-emerald-600 dark:hover:text-emerald-400 px-3 text-xs font-bold text-slate-700 dark:text-zinc-200 disabled:opacity-40 transition-colors whitespace-nowrap"
+                                    className="h-12 sm:h-14 inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:bg-emerald-500/10 hover:border-emerald-500/50 hover:text-emerald-600 dark:hover:text-emerald-400 px-4 sm:px-6 text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-100 disabled:opacity-50 transition-colors whitespace-nowrap"
                                     title="Nyalakan seluruh AC"
                                   >
-                                    <Power className="w-3.5 h-3.5 text-emerald-500" />
+                                    <Power className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-500 shrink-0" />
                                     <span>Nyalakan Semua</span>
                                   </button>
 
@@ -1042,10 +1124,10 @@ export default function ThermoSyncApp() {
                                     onClick={() =>
                                       setConfirmBulkOffHubId(node.id)
                                     }
-                                    className="h-9 inline-flex items-center gap-1 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:border-rose-500/40 hover:text-rose-600 dark:hover:text-rose-400 px-3 text-xs font-bold text-slate-700 dark:text-zinc-200 disabled:opacity-40 transition-colors whitespace-nowrap"
+                                    className="h-12 sm:h-14 inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:bg-rose-500/10 hover:border-rose-500/50 hover:text-rose-600 dark:hover:text-rose-400 px-4 sm:px-6 text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-100 disabled:opacity-50 transition-colors whitespace-nowrap"
                                     title="Matikan seluruh AC"
                                   >
-                                    <PowerOff className="w-3.5 h-3.5 text-rose-500" />
+                                    <PowerOff className="w-4 h-4 sm:w-5 sm:h-5 text-rose-500 shrink-0" />
                                     <span>Matikan Semua</span>
                                   </button>
                                 </div>
@@ -1066,7 +1148,12 @@ export default function ThermoSyncApp() {
                         </div>
 
                         {/* Modul PZEM-004T v4.0 — 6 Parameter Listrik AC (Sensor CT 100A) */}
-                        <PzemTelemetryPanel pzem={node.pzem} online={online} />
+                        <PzemTelemetryPanel
+                          pzem={node.pzem}
+                          online={online}
+                          onResetEnergy={() => handleResetEnergyNode(node)}
+                          isResettingEnergy={resettingEnergyNodeId === node.id}
+                        />
 
                         {/* Sub-Grid Multi-AC */}
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">

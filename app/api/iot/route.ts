@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
       };
 
       const [cmdRes, appRes] = await Promise.all([
-        insertCommandInSupabase(command),
+        insertCommandInSupabase(command, 'set_ac'),
         upsertApplianceInSupabase(updatedAppliance),
       ]);
 
@@ -147,6 +147,59 @@ export async function POST(req: NextRequest) {
         persisted: cmdRes.ok && appRes.ok,
         command,
         appliance: updatedAppliance,
+      });
+    }
+
+    // 1B. Hardware Node Command (reset_energy / learn_ir) for final ESP8266 firmware
+    if (action === 'hardware_command') {
+      const { esp32Id, esp32Name, firmwareCommand } = body as {
+        esp32Id: string;
+        esp32Name?: string;
+        firmwareCommand: 'reset_energy' | 'learn_ir';
+      };
+
+      if (!esp32Id || (firmwareCommand !== 'reset_energy' && firmwareCommand !== 'learn_ir')) {
+        return NextResponse.json(
+          { error: 'Perintah hardware tidak valid' },
+          { status: 400 }
+        );
+      }
+
+      const nowIso = new Date().toISOString();
+      const command: DeviceCommand = {
+        id: `cmd-hw-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        esp32Id,
+        esp32Name: esp32Name || esp32Id,
+        applianceId: '',
+        applianceName:
+          firmwareCommand === 'reset_energy' ? 'PZEM-004T v4.0' : 'IR Receiver D6',
+        source: firmwareCommand === 'learn_ir' ? 'Scanner' : 'Web',
+        actionSummary:
+          firmwareCommand === 'reset_energy'
+            ? 'Reset Energi Kumulatif (kWh -> 0)'
+            : 'Aktifkan Mode Learning IR (D6)',
+        payload: {
+          power: false,
+          temp: 24,
+          mode: 'cool',
+          fan: 'auto',
+          swing: false,
+          protocol: 'DAIKIN',
+          protocolBits: 216,
+          freqKhz: 38,
+          gpioTx: 23,
+          iracClass: 'IRac',
+        },
+        status: 'pending',
+        createdAt: nowIso,
+      };
+
+      const cmdRes = await insertCommandInSupabase(command, firmwareCommand);
+      return NextResponse.json({
+        ok: cmdRes.ok,
+        persisted: cmdRes.ok,
+        error: cmdRes.error,
+        command,
       });
     }
 

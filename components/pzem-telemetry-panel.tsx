@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Zap,
   Activity,
@@ -8,6 +8,7 @@ import {
   BarChart3,
   Waves,
   ShieldCheck,
+  RotateCcw,
 } from 'lucide-react';
 import {
   hasPzemReading,
@@ -22,6 +23,8 @@ import {
 interface PzemTelemetryPanelProps {
   pzem?: PzemTelemetry;
   online: boolean;
+  onResetEnergy?: () => void;
+  isResettingEnergy?: boolean;
 }
 
 function getToneTextClass(tone: PzemStatusTone): string {
@@ -37,7 +40,14 @@ function getToneTextClass(tone: PzemStatusTone): string {
   }
 }
 
-export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
+export function PzemTelemetryPanel({
+  pzem,
+  online,
+  onResetEnergy,
+  isResettingEnergy = false,
+}: PzemTelemetryPanelProps) {
+  const [confirmReset, setConfirmReset] = useState(false);
+
   const active = hasPzemReading(pzem);
   const voltage = active ? pzem!.voltage : null;
   const current = active ? pzem!.current : null;
@@ -48,7 +58,7 @@ export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
 
   const formattedPower = formatPzemPower(power);
   const voltageStatus = evaluateVoltageStatus(voltage);
-  const pfStatus = evaluatePowerFactorStatus(pf);
+  const pfStatus = evaluatePowerFactorStatus(pf, power);
   const freqStatus = evaluateFrequencyStatus(frequency);
 
   // Proportional load indicator relative to 23 kW (23,000 W) max PZEM-004T v4.0 CT capacity
@@ -66,7 +76,7 @@ export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
   return (
     <div className="space-y-2.5">
       {/* Clean Unboxed Header Row */}
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100">
             Monitoring Listrik AC · PZEM-004T v4.0
@@ -76,17 +86,56 @@ export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
           </span>
         </div>
 
-        <div className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+        <div className="flex flex-wrap items-center gap-2.5 text-[11px] font-medium text-slate-500 dark:text-zinc-400">
           {!online ? (
             <span className="text-rose-600 dark:text-rose-400 font-semibold">
               Hub Terputus
             </span>
           ) : active ? (
-            <span className={getToneTextClass(voltageStatus.tone) + ' font-semibold'}>
+            <span className={`${getToneTextClass(voltageStatus.tone)} font-semibold`}>
               Sensor Aktif · {voltageStatus.label}
             </span>
           ) : (
             <span>Menunggu pembacaan PZEM-004T</span>
+          )}
+
+          {onResetEnergy && active && (
+            confirmReset ? (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                  Reset kWh ke 0?
+                </span>
+                <button
+                  type="button"
+                  disabled={!online || isResettingEnergy}
+                  onClick={() => {
+                    setConfirmReset(false);
+                    onResetEnergy();
+                  }}
+                  className="h-7 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 px-2.5 text-[11px] font-bold disabled:opacity-40 whitespace-nowrap"
+                >
+                  Ya
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmReset(false)}
+                  className="h-7 rounded-lg border border-slate-300 dark:border-zinc-700 px-2 text-[11px] font-semibold text-slate-700 dark:text-zinc-300 whitespace-nowrap"
+                >
+                  Batal
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                disabled={!online || isResettingEnergy}
+                onClick={() => setConfirmReset(true)}
+                className="h-7 inline-flex items-center gap-1 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 px-2.5 text-[11px] font-semibold text-slate-600 dark:text-zinc-300 disabled:opacity-40 transition-colors whitespace-nowrap"
+                title="Reset counter energi kumulatif kWh pada modul PZEM-004T ke 0"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>{isResettingEnergy ? 'Mengirim...' : 'Reset kWh'}</span>
+              </button>
+            )
           )}
         </div>
       </div>
@@ -118,7 +167,7 @@ export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
             </div>
           </div>
 
-          {/* 2. Arus (Current): hingga 100 A (CT Eksternal) */}
+          {/* 2. Arus (Current): hingga 100 A (CT Eksternal, 3 desimal presisi PZEM) */}
           <div className="bg-slate-50 dark:bg-zinc-950/95 p-3.5 sm:p-4 flex flex-col justify-between gap-2">
             <div className="flex items-center justify-between gap-1.5">
               <span className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
@@ -128,7 +177,7 @@ export function PzemTelemetryPanel({ pzem, online }: PzemTelemetryPanelProps) {
             </div>
             <div className="flex items-baseline gap-1 font-mono tabular-nums">
               <span className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">
-                {current !== null ? current.toFixed(2) : '--'}
+                {current !== null ? current.toFixed(3) : '--'}
               </span>
               <span className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
                 A

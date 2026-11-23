@@ -139,7 +139,85 @@ test('maps PZEM-004T v4.0 6 electrical parameters and ESP8266 hum history key cl
   assert.deepEqual(formatPzemPower(825.5), { value: '825.5', unit: 'W' });
   assert.deepEqual(formatPzemPower(1850), { value: '1.85', unit: 'kW' });
   assert.equal(evaluateVoltageStatus(221.4).tone, 'nominal');
-  assert.equal(evaluatePowerFactorStatus(0.97).tone, 'nominal');
+  assert.equal(evaluatePowerFactorStatus(0.97, 825.5).tone, 'nominal');
+  assert.equal(evaluatePowerFactorStatus(0.03, 0.8).label, 'Standby');
   assert.equal(evaluateFrequencyStatus(50.0).tone, 'nominal');
 });
+
+test('merges live device_nodes and telemetry_logs from final firmware v2.7.3', async () => {
+  const { mergeLiveDeviceData } = await import('./supabase-iot-repo');
+
+  const merged = mergeLiveDeviceData({
+    legacyNodes: [],
+    deviceNodes: [
+      {
+        node_id: 'esp8266-utama',
+        name: 'ESP8266 Utama',
+        device_token: 'ts_live_esp8266_utama',
+        firmware_version: 'v2.7.3-esp8266-led-d3',
+        ip_address: '192.168.1.27',
+        wifi_ssid: 'Selese',
+        status: 'online',
+        last_seen: '2026-11-23T17:59:10+00:00',
+      },
+    ],
+    telemetryLogs: [
+      {
+        id: 2,
+        node_id: 'esp8266-utama',
+        temperature: 30.0,
+        humidity: 80.7,
+        voltage: 204.0,
+        current: 0.117,
+        power: 0.9,
+        energy: 557.546,
+        frequency: 50.0,
+        power_factor: 0.04,
+        ac_power: false,
+        ac_temp: 24,
+        ac_mode: 'cool',
+        ac_fan: 'auto',
+        ac_protocol: 'DAIKIN',
+        rssi: -57,
+        created_at: '2026-11-23T17:58:39.92576+00:00',
+      },
+      {
+        id: 3,
+        node_id: 'esp8266-utama',
+        temperature: 30.0,
+        humidity: 79.3,
+        voltage: 203.1,
+        current: 0.116,
+        power: 0.8,
+        energy: 557.546,
+        frequency: 50.0,
+        power_factor: 0.03,
+        ac_power: false,
+        ac_temp: 24,
+        ac_mode: 'cool',
+        ac_fan: 'auto',
+        ac_protocol: 'DAIKIN',
+        rssi: -56,
+        created_at: '2026-11-23T17:59:10.263902+00:00',
+      },
+    ],
+  });
+
+  assert.equal(merged.length, 1);
+  const node = merged[0];
+  assert.equal(node.id, 'esp8266-utama');
+  assert.equal(node.wifiSsid, 'Selese');
+  assert.equal(node.rssi, -56);
+  assert.equal(node.temperature, 30.0);
+  assert.equal(node.humidity, 79);
+  assert.equal(node.pzem?.voltage, 203.1);
+  assert.equal(node.pzem?.current, 0.116);
+  assert.equal(node.pzem?.power, 0.8);
+  assert.equal(node.pzem?.energy, 557.546);
+  assert.equal(node.pzem?.frequency, 50.0);
+  assert.equal(node.pzem?.pf, 0.03);
+  assert.equal(node.telemetryHistory.length, 2);
+  assert.equal(node.liveAcState?.protocol, 'DAIKIN');
+});
+
 

@@ -23,6 +23,7 @@ import {
 import {
   isEsp32Online,
   formatLastSeenLabel,
+  evaluateRssiStatus,
   maskDeviceToken,
   getIrChannelInfo,
   getActiveChannelsForHub,
@@ -410,16 +411,53 @@ export function DevicesManagement({
                     </div>
                   )}
 
-                  {/* Simplified Connection Info Strip */}
-                  <div className="grid grid-cols-1 gap-3">
-                    <div className="flex items-center justify-between gap-2 rounded-2xl bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 border border-slate-200/70 dark:border-zinc-800 text-xs text-slate-600 dark:text-zinc-400">
-                      <span className="font-medium">Status Koneksi</span>
-                      <span className="font-semibold text-slate-800 dark:text-zinc-200">
-                        {online ? 'Terhubung' : 'Terputus'} ·{' '}
-                        {formatLastSeenLabel(node.lastSeen, nowMs)}
-                      </span>
-                    </div>
-                  </div>
+                  {/* Live Hardware Telemetry Metadata Strip */}
+                  {(() => {
+                    const rssiInfo = evaluateRssiStatus(node.rssi);
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px rounded-2xl overflow-hidden bg-slate-200/80 dark:bg-zinc-800/80 border border-slate-200/70 dark:border-zinc-800">
+                        <div className="bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 flex flex-col gap-0.5">
+                          <span className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                            Status Koneksi
+                          </span>
+                          <span className="text-xs font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                            {online ? 'Terhubung' : 'Terputus'} ·{' '}
+                            {formatLastSeenLabel(node.lastSeen, nowMs)}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 flex flex-col gap-0.5">
+                          <span className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                            Jaringan WiFi
+                          </span>
+                          <span className="text-xs font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                            {node.wifiSsid || 'Menunggu SSID'}
+                            {typeof node.rssi === 'number'
+                              ? ` (${node.rssi} dBm · ${rssiInfo.label})`
+                              : ''}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 flex flex-col gap-0.5">
+                          <span className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                            IP & Firmware
+                          </span>
+                          <span className="text-xs font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                            {node.ipAddress || '0.0.0.0'} · {node.firmwareVersion}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 flex flex-col gap-0.5">
+                          <span className="text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+                            Sensor DHT22 & PZEM
+                          </span>
+                          <span className="text-xs font-mono font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                            {node.temperature.toFixed(1)}°C · {Math.round(node.humidity)}%
+                            {node.pzem && node.pzem.voltage !== null && node.pzem.power !== null
+                              ? ` · ${node.pzem.voltage.toFixed(1)}V · ${node.pzem.power.toFixed(1)}W`
+                              : ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Simplified AC Units Grid (CSS selector 4 & 5) */}
                   <div className="space-y-2.5">

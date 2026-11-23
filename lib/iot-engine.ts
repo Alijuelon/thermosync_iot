@@ -66,6 +66,14 @@ export interface PzemTelemetry {
   pf: number | null; // 0.00 – 1.00
 }
 
+export interface LiveAcTelemetryState {
+  power: boolean;
+  temp: number;
+  mode: ACMode;
+  fan: FanSpeed;
+  protocol: string;
+}
+
 export interface ESP32Node {
   id: string;
   userId: string;
@@ -73,6 +81,8 @@ export interface ESP32Node {
   roomLabel: string;
   macAddress: string;
   ipAddress: string;
+  wifiSsid?: string;
+  rssi?: number | null;
   firmwareVersion: string;
   deviceToken: string;
   tokenHash: string;
@@ -80,6 +90,7 @@ export interface ESP32Node {
   temperature: number; // °C
   humidity: number; // %
   pzem?: PzemTelemetry;
+  liveAcState?: LiveAcTelemetryState;
   telemetryHistory: TelemetryPoint[];
   pinout: {
     dht22: 'GPIO 21';
@@ -990,10 +1001,15 @@ export function evaluateVoltageStatus(
 }
 
 export function evaluatePowerFactorStatus(
-  pf: number | null | undefined
+  pf: number | null | undefined,
+  powerWatts?: number | null
 ): { label: string; tone: PzemStatusTone } {
   if (typeof pf !== 'number' || !Number.isFinite(pf)) {
     return { label: 'Menunggu', tone: 'idle' };
+  }
+  // When AC is OFF or idle standby (< 10 W), CT phase noise naturally yields low PF
+  if (typeof powerWatts === 'number' && Number.isFinite(powerWatts) && powerWatts < 10) {
+    return { label: 'Standby', tone: 'idle' };
   }
   if (pf >= 0.85) {
     return { label: 'Efisien', tone: 'nominal' };
@@ -1002,6 +1018,17 @@ export function evaluatePowerFactorStatus(
     return { label: 'Cukup', tone: 'warning' };
   }
   return { label: 'Rendah', tone: 'alert' };
+}
+
+export function evaluateRssiStatus(
+  rssi: number | null | undefined
+): { label: string; tone: PzemStatusTone } {
+  if (typeof rssi !== 'number' || !Number.isFinite(rssi) || rssi === 0) {
+    return { label: '-', tone: 'idle' };
+  }
+  if (rssi >= -65) return { label: 'Kuat', tone: 'nominal' };
+  if (rssi >= -78) return { label: 'Sedang', tone: 'warning' };
+  return { label: 'Lemah', tone: 'alert' };
 }
 
 export function evaluateFrequencyStatus(
@@ -1025,4 +1052,5 @@ export function evaluateFrequencyStatus(
   }
   return { label: 'Anomali', tone: 'alert' };
 }
+
 
