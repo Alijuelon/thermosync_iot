@@ -26,9 +26,9 @@ import {
   Sparkles,
   Wind,
   Shield,
+  Zap,
 } from 'lucide-react';
 import {
-  createInitialSeedData,
   INITIAL_SEED_TIMESTAMP,
   formatTimeHHMMSS,
   isEsp32Online,
@@ -38,6 +38,8 @@ import {
   generateDeviceToken,
   getIrChannelInfo,
   hasMultipleActiveChannels,
+  hasPzemReading,
+  formatPzemPower,
   IR_PROTOCOL_CATALOG,
   type ESP32Node,
   type ACAppliance,
@@ -47,11 +49,13 @@ import {
   type IrTxPin,
 } from '@/lib/iot-engine';
 import { SparklineChart } from '@/components/sparkline-chart';
+import { PzemTelemetryPanel } from '@/components/pzem-telemetry-panel';
 import { UniversalACController } from '@/components/universal-ac-controller';
 import { AutomaticScannerWizard } from '@/components/automatic-scanner-wizard';
 import { DevicesManagement } from '@/components/devices-management';
 import { HistoryActivityView } from '@/components/history-activity-view';
 import { AuthModal, type UserSession } from '@/components/auth-modal';
+import { getSupabaseClient } from '@/lib/supabase';
 
 type NavSection = 'dashboard' | 'controller' | 'scanner' | 'devices' | 'history';
 
@@ -60,86 +64,12 @@ export default function ThermoSyncApp() {
   const [isDark, setIsDark] = useState<boolean>(true);
   const [nowMs, setNowMs] = useState<number>(INITIAL_SEED_TIMESTAMP);
 
-  const [initialSeed] = useState(() => {
-    const base = createInitialSeedData(INITIAL_SEED_TIMESTAMP);
-    const tenantHub: ESP32Node = {
-      id: 'esp32-node-tenant-1',
-      userId: 'user-demo-2',
-      name: 'Studio Lantai 4',
-      roomLabel: 'Private Studio • Lantai 4',
-      macAddress: '4C:11:AE:9D:44:10',
-      ipAddress: '192.168.1.140',
-      firmwareVersion: 'v2.5.0',
-      deviceToken: 'ts_live_4c11ae9d4410_tenant4_88b12a7e',
-      tokenHash: 'sha256:6b21a90c14f8...88b12a7e',
-      lastSeen: new Date(INITIAL_SEED_TIMESTAMP - 15 * 1000).toISOString(),
-      temperature: 23.8,
-      humidity: 55,
-      pinout: {
-        dht22: 'GPIO 21',
-        irRx: 'GPIO 18',
-        irTx: 'Multi-Channel 1–4',
-      },
-      telemetryHistory: [
-        { time: '14:00', temp: 25.0, humidity: 58 },
-        { time: '15:00', temp: 24.5, humidity: 57 },
-        { time: '16:00', temp: 24.2, humidity: 56 },
-        { time: '17:00', temp: 24.0, humidity: 55 },
-        { time: '18:00', temp: 23.8, humidity: 55 },
-      ],
-    };
-    const tenantAc: ACAppliance = {
-      id: 'ac-tenant-studio',
-      esp32Id: 'esp32-node-tenant-1',
-      name: 'AC Studio Lantai 4',
-      brand: 'Daikin',
-      protocol: 'DAIKIN',
-      protocolBits: 280,
-      irTxPin: 23,
-      state: {
-        power: true,
-        temp: 22,
-        mode: 'cool',
-        fan: 'low',
-        swing: true,
-      },
-      lastUpdated: new Date(INITIAL_SEED_TIMESTAMP - 40 * 1000).toISOString(),
-      lastSource: 'Web',
-    };
-    const tenantCmd: DeviceCommand = {
-      id: 'cmd-tenant-1',
-      esp32Id: 'esp32-node-tenant-1',
-      esp32Name: 'Smart Hub — Studio Lantai 4',
-      applianceId: 'ac-tenant-studio',
-      applianceName: 'AC Studio Lantai 4',
-      source: 'Web',
-      actionSummary: '[Ch.1] Power ON · 22°C · COOL · Fan Low · Swing ON',
-      payload: buildFullStatePayload(tenantAc, {}),
-      status: 'executed',
-      latencyMs: 210,
-      createdAt: new Date(INITIAL_SEED_TIMESTAMP - 40 * 1000).toISOString(),
-      executedAt: new Date(INITIAL_SEED_TIMESTAMP - 39 * 1000).toISOString(),
-    };
-    return {
-      esp32Nodes: [...base.esp32Nodes, tenantHub],
-      appliances: [...base.appliances, tenantAc],
-      commands: [...base.commands, tenantCmd],
-    };
-  });
+  const [esp32Nodes, setEsp32Nodes] = useState<ESP32Node[]>([]);
+  const [appliances, setAppliances] = useState<ACAppliance[]>([]);
+  const [commands, setCommands] = useState<DeviceCommand[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  const [esp32Nodes, setEsp32Nodes] = useState<ESP32Node[]>(
-    initialSeed.esp32Nodes
-  );
-  const [appliances, setAppliances] = useState<ACAppliance[]>(
-    initialSeed.appliances
-  );
-  const [commands, setCommands] = useState<DeviceCommand[]>(
-    initialSeed.commands
-  );
-
-  const [selectedApplianceId, setSelectedApplianceId] = useState<string>(
-    initialSeed.appliances[0]?.id || ''
-  );
+  const [selectedApplianceId, setSelectedApplianceId] = useState<string>('');
   const [scannerTargetEsp32Id, setScannerTargetEsp32Id] = useState<
     string | undefined
   >(undefined);
@@ -189,6 +119,96 @@ export default function ThermoSyncApp() {
       root.classList.remove('dark');
     }
   }, [isDark]);
+
+  // Hydrate live actual data from Supabase via /api/iot and subscribe to Realtime changes
+  useEffect(() => {
+    let isCancelled = false;
+    let realtimeCleanup: (() => void) | null = null;
+
+    const loadFromBackend = async () => {
+      try {
+        const res = await fetch('/api/iot', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isCancelled || data?.source !== 'supabase') return;
+
+        if (Array.isArray(data.esp32Nodes)) {
+          setEsp32Nodes(data.esp32Nodes);
+        }
+        if (Array.isArray(data.appliances)) {
+          setAppliances(data.appliances);
+          setSelectedApplianceId((prev) =>
+            data.appliances.some((a: ACAppliance) => a.id === prev)
+              ? prev
+              : data.appliances[0]?.id || ''
+          );
+        }
+        if (Array.isArray(data.commands)) {
+          setCommands(data.commands);
+        }
+        setNowMs(Date.now());
+
+        if (!realtimeCleanup) {
+          const supabase = getSupabaseClient();
+          const channel = supabase
+            .channel('thermosync-realtime-sync')
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'esp32_nodes' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'ac_appliances' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'device_commands' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .subscribe();
+
+          realtimeCleanup = () => {
+            void supabase.removeChannel(channel);
+          };
+        }
+      } catch {
+        // Keep current state if network temporarily unavailable
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingData(false);
+        }
+      }
+    };
+
+    void loadFromBackend();
+    const tickTimer = setInterval(() => {
+      if (!isCancelled) setNowMs(Date.now());
+    }, 15000);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(tickTimer);
+      if (realtimeCleanup) realtimeCleanup();
+    };
+  }, []);
+
+  const persistIotMutation = (payload: Record<string, unknown>) => {
+    void fetch('/api/iot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {
+      // Non-blocking fallback when offline
+    });
+  };
 
   const showToast = (
     type: 'success' | 'warning' | 'error',
@@ -295,6 +315,8 @@ export default function ThermoSyncApp() {
         body: JSON.stringify({
           action: 'queue_command',
           applianceId,
+          applianceSnapshot: targetApp,
+          nodeSnapshot: parentNode,
           nextState: nextPartial,
           source,
         }),
@@ -377,28 +399,37 @@ export default function ThermoSyncApp() {
   };
 
   const handleSimulateHeartbeat = (esp32Id: string) => {
-    const nowIso = new Date(nowMs).toISOString();
+    const nextTs = nowMs + 1000;
+    const nowIso = new Date(nextTs).toISOString();
+    setNowMs(nextTs);
     setEsp32Nodes((prev) =>
-      prev.map((node) =>
-        node.id === esp32Id ? { ...node, lastSeen: nowIso } : node
-      )
+      prev.map((node) => {
+        if (node.id !== esp32Id) return node;
+        const updated = { ...node, lastSeen: nowIso };
+        persistIotMutation({ action: 'upsert_node', node: updated });
+        return updated;
+      })
     );
     showToast('success', 'Smart Hub kembali Online.');
   };
 
   const handleToggleEsp32OnlineStatus = (esp32Id: string) => {
+    const nextTs = nowMs + 1000;
+    setNowMs(nextTs);
     setEsp32Nodes((prev) =>
       prev.map((node) => {
         if (node.id !== esp32Id) return node;
         const currentlyOnline = isEsp32Online(node.lastSeen, nowMs);
         const nextLastSeen = currentlyOnline
-          ? new Date(nowMs - 5 * 60 * 1000).toISOString()
-          : new Date(nowMs).toISOString();
+          ? new Date(nextTs - 5 * 60 * 1000).toISOString()
+          : new Date(nextTs).toISOString();
+        const updated = { ...node, lastSeen: nextLastSeen };
+        persistIotMutation({ action: 'upsert_node', node: updated });
         showToast(
           currentlyOnline ? 'warning' : 'success',
           `${node.name}: ${currentlyOnline ? 'Offline' : 'Online'}`
         );
-        return { ...node, lastSeen: nextLastSeen };
+        return updated;
       })
     );
   };
@@ -453,6 +484,11 @@ export default function ThermoSyncApp() {
 
     setAppliances((prev) => [newAppliance, ...prev]);
     setCommands((prev) => [scanCommand, ...prev]);
+    persistIotMutation({
+      action: 'upsert_appliance',
+      appliance: newAppliance,
+      command: scanCommand,
+    });
     setSelectedApplianceId(newId);
     setActiveNav('controller');
     showToast('success', `${params.name} berhasil disimpan.`);
@@ -461,15 +497,16 @@ export default function ThermoSyncApp() {
   const handleRegenerateToken = (esp32Id: string) => {
     const fresh = generateDeviceToken();
     setEsp32Nodes((prev) =>
-      prev.map((node) =>
-        node.id === esp32Id
-          ? {
-              ...node,
-              deviceToken: fresh.token,
-              tokenHash: fresh.tokenHash,
-            }
-          : node
-      )
+      prev.map((node) => {
+        if (node.id !== esp32Id) return node;
+        const updated = {
+          ...node,
+          deviceToken: fresh.token,
+          tokenHash: fresh.tokenHash,
+        };
+        persistIotMutation({ action: 'upsert_node', node: updated });
+        return updated;
+      })
     );
     showToast('success', 'device_token berhasil diperbarui (regenerated).');
   };
@@ -480,35 +517,32 @@ export default function ThermoSyncApp() {
     macAddress: string;
     ipAddress: string;
   }) => {
+    const nextTs = nowMs + 1000;
+    setNowMs(nextTs);
     const fresh = generateDeviceToken();
     const newNode: ESP32Node = {
-      id: `hub-${nowMs}`,
+      id: `esp8266-${nextTs}`,
       userId: activeUserId,
       name: params.name,
       roomLabel: params.roomLabel,
       macAddress: params.macAddress,
       ipAddress: params.ipAddress,
-      firmwareVersion: 'v2.5.0',
+      firmwareVersion: 'v2.5.0-esp8266',
       deviceToken: fresh.token,
       tokenHash: fresh.tokenHash,
-      lastSeen: new Date(nowMs).toISOString(),
-      temperature: 25.2,
-      humidity: 60,
+      lastSeen: new Date(nextTs).toISOString(),
+      temperature: 0,
+      humidity: 0,
       pinout: {
         dht22: 'GPIO 21',
         irRx: 'GPIO 18',
         irTx: 'Multi-Channel 1–4',
       },
-      telemetryHistory: [
-        { time: '15:00', temp: 26.2, humidity: 63 },
-        { time: '16:00', temp: 25.9, humidity: 62 },
-        { time: '17:00', temp: 25.6, humidity: 61 },
-        { time: '18:00', temp: 25.4, humidity: 60 },
-        { time: '19:00', temp: 25.2, humidity: 60 },
-      ],
+      telemetryHistory: [],
     };
     setEsp32Nodes((prev) => [...prev, newNode]);
-    showToast('success', `${params.name} ditambahkan.`);
+    persistIotMutation({ action: 'upsert_node', node: newNode });
+    showToast('success', `${params.name} tersimpan di Supabase.`);
   };
 
   const handleUpdateEsp32Node = (
@@ -521,17 +555,18 @@ export default function ThermoSyncApp() {
     }
   ) => {
     setEsp32Nodes((prev) =>
-      prev.map((node) =>
-        node.id === esp32Id
-          ? {
-              ...node,
-              name: updates.name,
-              roomLabel: updates.roomLabel,
-              macAddress: updates.macAddress,
-              ipAddress: updates.ipAddress,
-            }
-          : node
-      )
+      prev.map((node) => {
+        if (node.id !== esp32Id) return node;
+        const updated = {
+          ...node,
+          name: updates.name,
+          roomLabel: updates.roomLabel,
+          macAddress: updates.macAddress,
+          ipAddress: updates.ipAddress,
+        };
+        persistIotMutation({ action: 'upsert_node', node: updated });
+        return updated;
+      })
     );
     showToast('success', `${updates.name} berhasil diperbarui.`);
   };
@@ -540,6 +575,7 @@ export default function ThermoSyncApp() {
     const target = esp32Nodes.find((n) => n.id === esp32Id);
     setEsp32Nodes((prev) => prev.filter((n) => n.id !== esp32Id));
     setAppliances((prev) => prev.filter((a) => a.esp32Id !== esp32Id));
+    persistIotMutation({ action: 'delete_node', esp32Id });
     if (target) {
       showToast('warning', `${target.name} dihapus.`);
     }
@@ -575,6 +611,7 @@ export default function ThermoSyncApp() {
       lastSource: 'Web',
     };
     setAppliances((prev) => [...prev, newAppliance]);
+    persistIotMutation({ action: 'upsert_appliance', appliance: newAppliance });
     showToast('success', `${params.name} ditambahkan.`);
   };
 
@@ -591,19 +628,20 @@ export default function ThermoSyncApp() {
       (p) => p.protocol === updates.protocol
     );
     setAppliances((prev) =>
-      prev.map((app) =>
-        app.id === applianceId
-          ? {
-              ...app,
-              name: updates.name,
-              esp32Id: updates.esp32Id,
-              protocol: updates.protocol,
-              irTxPin: updates.irTxPin,
-              brand: matchedProto?.brand || app.brand,
-              protocolBits: matchedProto?.bits || app.protocolBits,
-            }
-          : app
-      )
+      prev.map((app) => {
+        if (app.id !== applianceId) return app;
+        const updated = {
+          ...app,
+          name: updates.name,
+          esp32Id: updates.esp32Id,
+          protocol: updates.protocol,
+          irTxPin: updates.irTxPin,
+          brand: matchedProto?.brand || app.brand,
+          protocolBits: matchedProto?.bits || app.protocolBits,
+        };
+        persistIotMutation({ action: 'upsert_appliance', appliance: updated });
+        return updated;
+      })
     );
     showToast('success', `${updates.name} diperbarui.`);
   };
@@ -611,6 +649,7 @@ export default function ThermoSyncApp() {
   const handleDeleteAppliance = (applianceId: string) => {
     const target = appliances.find((a) => a.id === applianceId);
     setAppliances((prev) => prev.filter((a) => a.id !== applianceId));
+    persistIotMutation({ action: 'delete_appliance', applianceId });
     if (selectedApplianceId === applianceId) {
       const remaining = userAppliances.filter((a) => a.id !== applianceId);
       setSelectedApplianceId(remaining[0]?.id || '');
@@ -783,7 +822,7 @@ export default function ThermoSyncApp() {
               onClick={() => setIsAuthModalOpen(true)}
               className="w-full min-h-[42px] rounded-xl bg-sky-500 hover:bg-sky-400 text-white text-xs font-bold"
             >
-              Masuk atau Daftar Akun
+              Masuk ke Akun
             </button>
           </div>
         ) : (
@@ -831,7 +870,41 @@ export default function ThermoSyncApp() {
 
                 {/* Room AC Control Card */}
                 <section className="space-y-4">
-                  {userEsp32Nodes.map((node) => {
+                  {isLoadingData ? (
+                    <div className="rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/90 p-10 text-center space-y-3 shadow-sm">
+                      <Loader2 className="w-6 h-6 animate-spin text-sky-500 mx-auto" />
+                      <p className="text-xs font-medium text-slate-500 dark:text-zinc-400">
+                        Memuat data perangkat dari Supabase...
+                      </p>
+                    </div>
+                  ) : userEsp32Nodes.length === 0 ? (
+                    <div className="rounded-3xl border border-dashed border-slate-300 dark:border-zinc-800 bg-white dark:bg-zinc-900/90 p-8 sm:p-10 text-center space-y-4 shadow-sm">
+                      <div className="w-12 h-12 rounded-2xl bg-sky-500/10 text-sky-500 flex items-center justify-center mx-auto">
+                        <Cpu className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1 max-w-md mx-auto">
+                        <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-50">
+                          Belum Ada Perangkat ESP8266 Terdaftar
+                        </h2>
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
+                          Database Supabase sudah aktif dan bersih. Tambahkan area
+                          perangkat ESP8266 Anda di menu Devices untuk mendapatkan
+                          token perangkat dan mulai memantau suhu serta mengontrol AC.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveNav('devices')}
+                          className="h-10 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-white px-4 text-xs font-bold shadow-xs"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Tambah Perangkat ESP8266</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    userEsp32Nodes.map((node) => {
                     const online = isEsp32Online(node.lastSeen, nowMs);
                     const roomAppliances = userAppliances.filter(
                       (a) => a.esp32Id === node.id
@@ -883,19 +956,39 @@ export default function ThermoSyncApp() {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2.5">
-                              {/* Real-time Room Sensor Pill: Temp (°C) & Humidity (%) */}
+                              {/* Real-time Room Sensor Bar: Temp (°C), Humidity (%), & Active Power (W/kW) */}
                               <div className="inline-flex items-center gap-2.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200/80 dark:border-zinc-800 px-3.5 py-1.5 font-mono tabular-nums text-xs">
                                 <span className="inline-flex items-center gap-1 font-bold text-slate-900 dark:text-zinc-100">
                                   <Thermometer className="w-3.5 h-3.5 text-sky-500" />
-                                  <span>{node.temperature.toFixed(1)}°C</span>
+                                  <span>
+                                    {node.temperature > 0
+                                      ? `${node.temperature.toFixed(1)}°C`
+                                      : '--°C'}
+                                  </span>
                                 </span>
                                 <span className="text-slate-300 dark:text-zinc-700">
                                   |
                                 </span>
                                 <span className="inline-flex items-center gap-1 text-slate-600 dark:text-zinc-300">
                                   <Droplets className="w-3.5 h-3.5 text-sky-400" />
-                                  <span>{node.humidity}%</span>
+                                  <span>
+                                    {node.humidity > 0 ? `${node.humidity}%` : '--%'}
+                                  </span>
                                 </span>
+                                {hasPzemReading(node.pzem) && (
+                                  <>
+                                    <span className="text-slate-300 dark:text-zinc-700">
+                                      |
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400">
+                                      <Zap className="w-3.5 h-3.5 text-amber-500" />
+                                      <span>
+                                        {formatPzemPower(node.pzem?.power).value}{' '}
+                                        {formatPzemPower(node.pzem?.power).unit}
+                                      </span>
+                                    </span>
+                                  </>
+                                )}
                               </div>
 
                               {!online ? (
@@ -971,6 +1064,9 @@ export default function ThermoSyncApp() {
                             </div>
                           </div>
                         </div>
+
+                        {/* Modul PZEM-004T v4.0 — 6 Parameter Listrik AC (Sensor CT 100A) */}
+                        <PzemTelemetryPanel pzem={node.pzem} online={online} />
 
                         {/* Sub-Grid Multi-AC */}
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -1106,7 +1202,7 @@ export default function ThermoSyncApp() {
                         </div>
                       </div>
                     );
-                  })}
+                  }))}
                 </section>
               </motion.div>
             )}
@@ -1192,6 +1288,10 @@ export default function ThermoSyncApp() {
                     setCommands((prev) =>
                       prev.filter((c) => !userHubIds.has(c.esp32Id))
                     );
+                    persistIotMutation({
+                      action: 'clear_history',
+                      esp32Ids: Array.from(userHubIds),
+                    });
                     showToast('warning', 'Log akun ini dihapus.');
                   }}
                 />

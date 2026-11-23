@@ -57,6 +57,15 @@ export interface TelemetryPoint {
   humidity: number;
 }
 
+export interface PzemTelemetry {
+  voltage: number | null; // 80 – 260 VAC
+  current: number | null; // 0 – 100 A (CT eksternal)
+  power: number | null; // 0 – 23,000 W (~23 kW)
+  energy: number | null; // 0 – 9999 kWh
+  frequency: number | null; // 45 – 65 Hz
+  pf: number | null; // 0.00 – 1.00
+}
+
 export interface ESP32Node {
   id: string;
   userId: string;
@@ -70,6 +79,7 @@ export interface ESP32Node {
   lastSeen: string; // ISO string
   temperature: number; // °C
   humidity: number; // %
+  pzem?: PzemTelemetry;
   telemetryHistory: TelemetryPoint[];
   pinout: {
     dht22: 'GPIO 21';
@@ -939,3 +949,80 @@ export function createInitialSeedData(nowMs: number = Date.now()): {
 
   return { esp32Nodes, appliances, commands };
 }
+
+export type PzemStatusTone = 'nominal' | 'warning' | 'alert' | 'idle';
+
+export function hasPzemReading(pzem?: PzemTelemetry | null): boolean {
+  if (!pzem) return false;
+  return (
+    typeof pzem.voltage === 'number' &&
+    Number.isFinite(pzem.voltage) &&
+    pzem.voltage > 0
+  );
+}
+
+export function formatPzemPower(watts: number | null | undefined): {
+  value: string;
+  unit: 'W' | 'kW';
+} {
+  if (typeof watts !== 'number' || !Number.isFinite(watts) || watts < 0) {
+    return { value: '--', unit: 'W' };
+  }
+  if (watts >= 1000) {
+    return { value: (watts / 1000).toFixed(2), unit: 'kW' };
+  }
+  return { value: watts.toFixed(1), unit: 'W' };
+}
+
+export function evaluateVoltageStatus(
+  voltage: number | null | undefined
+): { label: string; tone: PzemStatusTone } {
+  if (typeof voltage !== 'number' || !Number.isFinite(voltage) || voltage <= 0) {
+    return { label: 'Menunggu', tone: 'idle' };
+  }
+  if (voltage >= 200 && voltage <= 240) {
+    return { label: 'Nominal', tone: 'nominal' };
+  }
+  if ((voltage >= 180 && voltage < 200) || (voltage > 240 && voltage <= 250)) {
+    return { label: 'Fluktuasi', tone: 'warning' };
+  }
+  return { label: 'Di Luar Rentang', tone: 'alert' };
+}
+
+export function evaluatePowerFactorStatus(
+  pf: number | null | undefined
+): { label: string; tone: PzemStatusTone } {
+  if (typeof pf !== 'number' || !Number.isFinite(pf)) {
+    return { label: 'Menunggu', tone: 'idle' };
+  }
+  if (pf >= 0.85) {
+    return { label: 'Efisien', tone: 'nominal' };
+  }
+  if (pf >= 0.65) {
+    return { label: 'Cukup', tone: 'warning' };
+  }
+  return { label: 'Rendah', tone: 'alert' };
+}
+
+export function evaluateFrequencyStatus(
+  frequency: number | null | undefined
+): { label: string; tone: PzemStatusTone } {
+  if (
+    typeof frequency !== 'number' ||
+    !Number.isFinite(frequency) ||
+    frequency <= 0
+  ) {
+    return { label: 'Menunggu', tone: 'idle' };
+  }
+  if (frequency >= 49.0 && frequency <= 51.0) {
+    return { label: 'Stabil 50Hz', tone: 'nominal' };
+  }
+  if (frequency >= 59.0 && frequency <= 61.0) {
+    return { label: 'Stabil 60Hz', tone: 'nominal' };
+  }
+  if (frequency >= 45.0 && frequency <= 65.0) {
+    return { label: 'Dalam Rentang', tone: 'warning' };
+  }
+  return { label: 'Anomali', tone: 'alert' };
+}
+

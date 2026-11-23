@@ -100,8 +100,8 @@ test('PRD v1.1: Multi-AC & Multi-Channel IR TX helpers detect active channels, b
   const now = 1_700_000_000_000;
   const seed = createInitialSeedData(now);
 
-  assert.equal(seed.esp32Nodes.length, 3);
-  assert.equal(seed.appliances.length, 5);
+  assert.equal(seed.esp32Nodes.length, 1);
+  assert.equal(seed.appliances.length, 2);
 
   // Hub 1 (esp32-kamar-utama) has 2 ACs on GPIO 23 and GPIO 25 -> >= 2 active channels
   assert.deepEqual(
@@ -113,13 +113,17 @@ test('PRD v1.1: Multi-AC & Multi-Channel IR TX helpers detect active channels, b
     true
   );
 
-  // Hub 2 (esp32-ruang-kerja) has 2 ACs both on shared GPIO 23 -> 1 active channel
+  // Single-channel hub fixture -> 1 active channel
+  const singleChannelFixtures = [
+    { esp32Id: 'esp32-ruang-kerja', irTxPin: 23 as const, protocol: 'PANASONIC_AC' },
+    { esp32Id: 'esp32-ruang-kerja', irTxPin: 23 as const, protocol: 'GREE' },
+  ];
   assert.deepEqual(
-    getActiveChannelsForHub(seed.appliances, 'esp32-ruang-kerja'),
+    getActiveChannelsForHub(singleChannelFixtures, 'esp32-ruang-kerja'),
     [23]
   );
   assert.equal(
-    hasMultipleActiveChannels(seed.appliances, 'esp32-ruang-kerja'),
+    hasMultipleActiveChannels(singleChannelFixtures, 'esp32-ruang-kerja'),
     false
   );
 
@@ -131,10 +135,9 @@ test('PRD v1.1: Multi-AC & Multi-Channel IR TX helpers detect active channels, b
     hasDuplicateProtocolInHub(seed.appliances, 'esp32-kamar-utama', 'DAIKIN'),
     true
   );
-  // Hub 2 has 1 PANASONIC_AC and 1 GREE -> no duplicate protocol
   assert.equal(
     hasDuplicateProtocolInHub(
-      seed.appliances,
+      singleChannelFixtures,
       'esp32-ruang-kerja',
       'PANASONIC_AC'
     ),

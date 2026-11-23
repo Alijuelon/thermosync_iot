@@ -85,13 +85,14 @@ export function SparklineChart({
         />
       </svg>
       <div className="mt-2.5 pt-2 border-t border-slate-200/70 dark:border-zinc-800/80 flex items-center justify-between gap-1.5 text-[10px] sm:text-xs">
-        <span className="inline-flex items-center rounded-lg bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 px-2.5 py-1 font-mono tabular-nums font-medium text-slate-600 dark:text-zinc-300 whitespace-nowrap shrink-0">
+        <span className="inline-flex items-center rounded-lg bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 px-2 sm:px-2.5 py-1 font-mono tabular-nums font-medium text-slate-600 dark:text-zinc-300 whitespace-nowrap shrink-0">
           {data[0]?.time} · {data[0]?.temp.toFixed(1)}°C
         </span>
-        <span className="inline-flex items-center justify-center rounded-lg bg-slate-100 dark:bg-zinc-800/90 border border-slate-200/70 dark:border-zinc-700/70 px-2.5 py-1 font-semibold text-slate-600 dark:text-zinc-300 whitespace-nowrap truncate">
-          Tren Suhu 6 Jam
+        <span className="inline-flex items-center justify-center rounded-lg bg-slate-100 dark:bg-zinc-800/90 border border-slate-200/70 dark:border-zinc-700/70 px-2 sm:px-2.5 py-1 font-semibold text-slate-600 dark:text-zinc-300 whitespace-nowrap">
+          <span className="sm:hidden">Tren Suhu</span>
+          <span className="hidden sm:inline">Tren Suhu 6 Jam</span>
         </span>
-        <span className="inline-flex items-center rounded-lg bg-sky-500/10 border border-sky-500/25 px-2.5 py-1 font-mono tabular-nums font-bold text-sky-600 dark:text-sky-400 whitespace-nowrap shrink-0">
+        <span className="inline-flex items-center rounded-lg bg-sky-500/10 border border-sky-500/25 px-2 sm:px-2.5 py-1 font-mono tabular-nums font-bold text-sky-600 dark:text-sky-400 whitespace-nowrap shrink-0">
           {data[data.length - 1]?.time} · {data[data.length - 1]?.temp.toFixed(1)}°C
         </span>
       </div>

@@ -110,8 +110,8 @@ export function DevicesManagement({
   const [editingHubId, setEditingHubId] = useState<string | null>(null);
   const [hubFormName, setHubFormName] = useState<string>('');
   const [hubFormRoom, setHubFormRoom] = useState<string>('');
-  const [hubFormMac, setHubFormMac] = useState<string>('24:6F:28:9A:33:B1');
-  const [hubFormIp, setHubFormIp] = useState<string>('192.168.1.115');
+  const [hubFormMac, setHubFormMac] = useState<string>('');
+  const [hubFormIp, setHubFormIp] = useState<string>('');
   const [hubFormError, setHubFormError] = useState<string>('');
 
   // Unified Add / Edit AC Modal state
@@ -137,8 +137,8 @@ export function DevicesManagement({
     setEditingHubId(null);
     setHubFormName('');
     setHubFormRoom('');
-    setHubFormMac('24:6F:28:9A:33:B1');
-    setHubFormIp('192.168.1.115');
+    setHubFormMac('');
+    setHubFormIp('');
     setHubFormError('');
   };
 
@@ -155,22 +155,22 @@ export function DevicesManagement({
   const handleHubFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!hubFormName.trim() || !hubFormRoom.trim()) {
-      setHubFormError('Nama Smart Hub & area ruangan wajib diisi.');
+      setHubFormError('Nama perangkat ESP8266 & area ruangan wajib diisi.');
       return;
     }
     if (hubModalMode === 'add') {
       onAddEsp32Node({
         name: hubFormName.trim(),
         roomLabel: hubFormRoom.trim(),
-        macAddress: hubFormMac.trim() || '24:6F:28:9A:33:B1',
-        ipAddress: hubFormIp.trim() || '192.168.1.115',
+        macAddress: hubFormMac.trim(),
+        ipAddress: hubFormIp.trim(),
       });
     } else if (hubModalMode === 'edit' && editingHubId) {
       onUpdateEsp32Node(editingHubId, {
         name: hubFormName.trim(),
         roomLabel: hubFormRoom.trim(),
-        macAddress: hubFormMac.trim() || '24:6F:28:9A:33:B1',
-        ipAddress: hubFormIp.trim() || '192.168.1.115',
+        macAddress: hubFormMac.trim(),
+        ipAddress: hubFormIp.trim(),
       });
     }
     setHubModalMode(null);
@@ -254,28 +254,16 @@ export function DevicesManagement({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {esp32Nodes[0] && (
+          {esp32Nodes.length > 0 && (
             <button
               type="button"
-              onClick={() => {
-                setFirmwareTab('cpp');
-                setFirmwareModalNode(esp32Nodes[0]);
-              }}
-              className="h-9 inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-bold text-sky-600 dark:text-sky-400 whitespace-nowrap shadow-xs"
+              onClick={() => openAddApplianceModal()}
+              className="h-9 inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 text-xs font-bold text-slate-800 dark:text-zinc-100 whitespace-nowrap shadow-xs"
             >
-              <Code className="w-3.5 h-3.5" />
-              <span>Firmware &amp; Rangkaian ESP8266</span>
+              <Plus className="w-3.5 h-3.5 text-sky-500" />
+              <span>Tambah AC</span>
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={() => openAddApplianceModal()}
-            className="h-9 inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 text-xs font-bold text-slate-800 dark:text-zinc-100 whitespace-nowrap shadow-xs"
-          >
-            <Plus className="w-3.5 h-3.5 text-sky-500" />
-            <span>Tambah AC</span>
-          </button>
 
           <button
             type="button"
@@ -290,7 +278,26 @@ export function DevicesManagement({
 
       {/* Grouped Room Cards with Appliances */}
       <section className="space-y-4">
-        {esp32Nodes.map((node) => {
+        {esp32Nodes.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-slate-300 dark:border-zinc-800 bg-white dark:bg-zinc-900/90 p-8 text-center space-y-3 shadow-sm">
+            <p className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+              Belum ada area atau perangkat ESP8266 yang terdaftar
+            </p>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
+              Klik <strong>Tambah Area</strong> untuk mendaftarkan modul ESP8266
+              aktual Anda ke Supabase, lalu salin kode firmware beserta tokennya.
+            </p>
+            <button
+              type="button"
+              onClick={openAddHubModal}
+              className="h-9 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-white px-4 text-xs font-bold shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tambah Area Pertama</span>
+            </button>
+          </div>
+        ) : (
+          esp32Nodes.map((node) => {
           const online = isEsp32Online(node.lastSeen, nowMs);
           const hubAppliances = appliances.filter((a) => a.esp32Id === node.id);
           const isExpanded = expandedHubIds[node.id] ?? true;
@@ -495,7 +502,7 @@ export function DevicesManagement({
               )}
             </div>
           );
-        })}
+        }))}
       </section>
 
       {/* Modal: Add / Edit Smart Hub */}
@@ -554,13 +561,14 @@ export function DevicesManagement({
                     htmlFor="hub-mac-input"
                     className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1"
                   >
-                    MAC Address
+                    MAC Address (Opsional)
                   </label>
                   <input
                     id="hub-mac-input"
                     type="text"
                     value={hubFormMac}
                     onChange={(e) => setHubFormMac(e.target.value)}
+                    placeholder="Otomatis dari ESP8266"
                     className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 text-xs font-mono"
                   />
                 </div>
@@ -569,13 +577,14 @@ export function DevicesManagement({
                     htmlFor="hub-ip-input"
                     className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1"
                   >
-                    IP Lokal
+                    IP Lokal (Opsional)
                   </label>
                   <input
                     id="hub-ip-input"
                     type="text"
                     value={hubFormIp}
                     onChange={(e) => setHubFormIp(e.target.value)}
+                    placeholder="Otomatis dari ESP8266"
                     className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 text-xs font-mono"
                   />
                 </div>
@@ -823,10 +832,9 @@ export function DevicesManagement({
                   const text =
                     firmwareTab === 'cpp'
                       ? generateEsp32FirmwareCode({
+                          nodeId: firmwareModalNode.id,
                           esp32Name: firmwareModalNode.name,
                           deviceToken: firmwareModalNode.deviceToken,
-                          apiEndpoint:
-                            'https://thermosync-iot.vercel.app/api/iot',
                         })
                       : firmwareTab === 'wiring'
                       ? ESP8266_WIRING_GUIDE
@@ -854,9 +862,9 @@ export function DevicesManagement({
               <pre className="text-[11px] font-mono text-emerald-400 whitespace-pre-wrap leading-relaxed">
                 {firmwareTab === 'cpp'
                   ? generateEsp32FirmwareCode({
+                      nodeId: firmwareModalNode.id,
                       esp32Name: firmwareModalNode.name,
                       deviceToken: firmwareModalNode.deviceToken,
-                      apiEndpoint: 'https://thermosync-iot.vercel.app/api/iot',
                     })
                   : firmwareTab === 'wiring'
                   ? ESP8266_WIRING_GUIDE
