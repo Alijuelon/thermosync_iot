@@ -99,6 +99,15 @@ export interface ESP32Node {
   };
 }
 
+export interface LearnedIrCode {
+  id: string;
+  nodeId: string;
+  protocol: string;
+  rawHex: string;
+  bits: number;
+  createdAt: string;
+}
+
 export interface ACAppliance {
   id: string;
   esp32Id: string;
@@ -280,6 +289,7 @@ export const AC_BRANDS = [
   'Aqua',
   'Haier',
   'Midea',
+  'Midea (SKEM)',
   'AUX',
   'Changhong',
   'TCL',
@@ -483,6 +493,24 @@ export const IR_PROTOCOL_CATALOG: IRProtocolProfile[] = [
     bits: 24,
     sampleHex: '0xB2BF40',
     notes: 'Protokol Coolix/Midea 24-bit',
+  },
+  {
+    id: 'prof-midea-skem-1',
+    brand: 'Midea (SKEM)',
+    protocol: 'COOLIX',
+    modelSeries: 'MSAF-09CRN2(I) — Terverifikasi COOLIX 24-bit',
+    bits: 24,
+    sampleHex: '0xB2BF40',
+    notes: 'Protokol terverifikasi AC Midea MSAF-09CRN2(I) (COOLIX 24-bit)',
+  },
+  {
+    id: 'prof-midea-skem-2',
+    brand: 'Midea (SKEM)',
+    protocol: 'MIDEA',
+    modelSeries: 'Midea SKEM Inverter / RG57 Alternatif (MIDEA 48-bit)',
+    bits: 48,
+    sampleHex: '0xA1826FFFFF6C',
+    notes: 'Protokol alternatif Midea 48-bit (RG10A / RG57 / R51M)',
   },
   {
     id: 'prof-aux-1',
@@ -787,6 +815,51 @@ export function getProtocolsByBrand(brand: string): IRProtocolProfile[] {
   return IR_PROTOCOL_CATALOG.filter(
     (p) => p.brand.toLowerCase() === normalized
   );
+}
+
+/**
+ * Resolves a real captured IR protocol from ESP8266 ir_learned_codes (e.g. MIDEA, COOLIX, DAIKIN)
+ * into an IRProtocolProfile ready to test and save.
+ */
+export function matchCapturedProtocolToProfile(
+  protocol: string,
+  bits?: number,
+  rawHex?: string
+): IRProtocolProfile {
+  const upper = protocol.trim().toUpperCase();
+  if (upper === 'MIDEA' || upper === 'COOLIX') {
+    const skemMatch = IR_PROTOCOL_CATALOG.find(
+      (p) => p.brand === 'Midea (SKEM)' && p.protocol.toUpperCase() === upper
+    );
+    if (skemMatch) {
+      return {
+        ...skemMatch,
+        bits: bits && bits > 0 ? bits : skemMatch.bits,
+        sampleHex: rawHex || skemMatch.sampleHex,
+      };
+    }
+  }
+
+  const exact = IR_PROTOCOL_CATALOG.find(
+    (p) => p.protocol.toUpperCase() === upper
+  );
+  if (exact) {
+    return {
+      ...exact,
+      bits: bits && bits > 0 ? bits : exact.bits,
+      sampleHex: rawHex || exact.sampleHex,
+    };
+  }
+
+  return {
+    id: `prof-captured-${upper.toLowerCase() || 'unknown'}`,
+    brand: upper || 'AC Custom',
+    protocol: upper || 'MIDEA',
+    modelSeries: 'Hasil Pemindaian Remote Fisik (D6)',
+    bits: bits && bits > 0 ? bits : 48,
+    sampleHex: rawHex || '0x0',
+    notes: `Terdeteksi langsung dari sensor IR Receiver D6 (${upper})`,
+  };
 }
 
 /**

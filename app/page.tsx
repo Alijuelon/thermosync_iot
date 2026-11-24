@@ -48,6 +48,7 @@ import {
   type ACState,
   type CommandSource,
   type IrTxPin,
+  type LearnedIrCode,
 } from '@/lib/iot-engine';
 import { SparklineChart } from '@/components/sparkline-chart';
 import { PzemTelemetryPanel } from '@/components/pzem-telemetry-panel';
@@ -68,6 +69,7 @@ export default function ThermoSyncApp() {
   const [esp32Nodes, setEsp32Nodes] = useState<ESP32Node[]>([]);
   const [appliances, setAppliances] = useState<ACAppliance[]>([]);
   const [commands, setCommands] = useState<DeviceCommand[]>([]);
+  const [learnedIrCodes, setLearnedIrCodes] = useState<LearnedIrCode[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
   const [selectedApplianceId, setSelectedApplianceId] = useState<string>('');
@@ -150,6 +152,9 @@ export default function ThermoSyncApp() {
         if (Array.isArray(data.commands)) {
           setCommands(data.commands);
         }
+        if (Array.isArray(data.learnedIrCodes)) {
+          setLearnedIrCodes(data.learnedIrCodes);
+        }
         setNowMs(Date.now());
 
         if (!realtimeCleanup) {
@@ -187,6 +192,13 @@ export default function ThermoSyncApp() {
             .on(
               'postgres_changes',
               { event: '*', schema: 'public', table: 'device_commands' },
+              () => {
+                void loadFromBackend();
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: 'INSERT', schema: 'public', table: 'ir_learned_codes' },
               () => {
                 void loadFromBackend();
               }
@@ -466,6 +478,79 @@ export default function ThermoSyncApp() {
     }
   };
 
+  const handleTriggerLearnIr = async (esp32Id: string) => {
+    const node = esp32Nodes.find((n) => n.id === esp32Id);
+    try {
+      const res = await fetch('/api/iot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'hardware_command',
+          esp32Id,
+          esp32Name: node?.name || esp32Id,
+          firmwareCommand: 'learn_ir',
+        }),
+      });
+      const json = await res.json();
+      if (json?.ok) {
+        if (json.command) {
+          setCommands((prev) => [json.command, ...prev]);
+        }
+        showToast(
+          'success',
+          'Mode Scan Remote D6 diaktifkan. Arahkan remote AC ke sensor VS1838B.'
+        );
+      } else {
+        showToast('error', json?.error || 'Gagal mengaktifkan mode scan IR.');
+      }
+    } catch {
+      showToast('error', 'Koneksi gagal saat mengirim perintah scan IR.');
+    }
+  };
+
+  const handleSendTestIrSignal = async (params: {
+    esp32Id: string;
+    brand: string;
+    protocol: string;
+    bits: number;
+    power: boolean;
+    temp: number;
+    label: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const node = esp32Nodes.find((n) => n.id === params.esp32Id);
+    try {
+      const res = await fetch('/api/iot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'test_ir_signal',
+          esp32Id: params.esp32Id,
+          esp32Name: node?.name || params.esp32Id,
+          brand: params.brand,
+          protocol: params.protocol,
+          bits: params.bits,
+          power: params.power,
+          temp: params.temp,
+          label: params.label,
+        }),
+      });
+      const json = await res.json();
+      if (json?.ok) {
+        if (json.command) {
+          setCommands((prev) => [json.command, ...prev]);
+        }
+        showToast(
+          'success',
+          `Sinyal tes ${params.protocol} dikirim ke ${node?.name || params.esp32Id}.`
+        );
+        return { ok: true };
+      }
+      return { ok: false, error: json?.error || 'Gagal mengirim sinyal IR.' };
+    } catch {
+      return { ok: false, error: 'Koneksi gagal saat mengirim sinyal IR.' };
+    }
+  };
+
   const handleToggleEsp32OnlineStatus = (esp32Id: string) => {
     const nextTs = nowMs + 1000;
     setNowMs(nextTs);
@@ -637,21 +722,28 @@ export default function ThermoSyncApp() {
   const handleAddApplianceManual = (params: {
     name: string;
     esp32Id: string;
+    brand?: string;
     protocol: string;
+    protocolBits?: number;
     irTxPin: IrTxPin;
   }) => {
     const currentTs = nowMs + 1000;
     setNowMs(currentTs);
     const matchedProto =
+      IR_PROTOCOL_CATALOG.find(
+        (p) =>
+          (!params.brand || p.brand === params.brand) &&
+          p.protocol === params.protocol
+      ) ||
       IR_PROTOCOL_CATALOG.find((p) => p.protocol === params.protocol) ||
       IR_PROTOCOL_CATALOG[0];
     const newAppliance: ACAppliance = {
       id: `ac-${currentTs}`,
       esp32Id: params.esp32Id,
       name: params.name,
-      brand: matchedProto.brand,
+      brand: params.brand || matchedProto.brand,
       protocol: matchedProto.protocol,
-      protocolBits: matchedProto.bits,
+      protocolBits: params.protocolBits || matchedProto.bits,
       irTxPin: params.irTxPin,
       state: {
         power: false,
@@ -673,13 +765,18 @@ export default function ThermoSyncApp() {
     updates: {
       name: string;
       esp32Id: string;
+      brand?: string;
       protocol: string;
+      protocolBits?: number;
       irTxPin: IrTxPin;
     }
   ) => {
-    const matchedProto = IR_PROTOCOL_CATALOG.find(
-      (p) => p.protocol === updates.protocol
-    );
+    const matchedProto =
+      IR_PROTOCOL_CATALOG.find(
+        (p) =>
+          (!updates.brand || p.brand === updates.brand) &&
+          p.protocol === updates.protocol
+      ) || IR_PROTOCOL_CATALOG.find((p) => p.protocol === updates.protocol);
     setAppliances((prev) =>
       prev.map((app) => {
         if (app.id !== applianceId) return app;
@@ -689,8 +786,9 @@ export default function ThermoSyncApp() {
           esp32Id: updates.esp32Id,
           protocol: updates.protocol,
           irTxPin: updates.irTxPin,
-          brand: matchedProto?.brand || app.brand,
-          protocolBits: matchedProto?.bits || app.protocolBits,
+          brand: updates.brand || matchedProto?.brand || app.brand,
+          protocolBits:
+            updates.protocolBits || matchedProto?.bits || app.protocolBits,
         };
         persistIotMutation({ action: 'upsert_appliance', appliance: updated });
         return updated;
@@ -1328,8 +1426,11 @@ export default function ThermoSyncApp() {
                 <AutomaticScannerWizard
                   esp32Nodes={userEsp32Nodes}
                   appliances={userAppliances}
+                  learnedIrCodes={learnedIrCodes}
                   initialEsp32Id={scannerTargetEsp32Id}
                   nowMs={nowMs}
+                  onTriggerLearnIr={handleTriggerLearnIr}
+                  onSendTestIrSignal={handleSendTestIrSignal}
                   onSaveScannedAppliance={handleSaveScannedAppliance}
                 />
               </motion.div>

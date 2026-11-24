@@ -138,19 +138,30 @@ export function UniversalACController({
     },
   }[mode];
 
+  const effectiveMinTemp =
+    activeAppliance.protocol.toUpperCase() === 'COOLIX' ||
+    activeAppliance.protocol.toUpperCase() === 'MIDEA'
+      ? 17
+      : MIN_AC_TEMP;
+  const displayTemp = Math.max(effectiveMinTemp, Math.min(MAX_AC_TEMP, temp));
+
   const radius = 104;
   const circumference = 2 * Math.PI * radius;
   const arcFraction = 250 / 360;
   const maxArcLength = circumference * arcFraction;
-  const progressRatio = (temp - MIN_AC_TEMP) / (MAX_AC_TEMP - MIN_AC_TEMP);
+  const progressRatio =
+    (displayTemp - effectiveMinTemp) / (MAX_AC_TEMP - effectiveMinTemp);
   const activeArcLength = power ? Math.max(0.05, progressRatio) * maxArcLength : 0;
 
   const fullPayloadPreview = buildFullStatePayload(activeAppliance, {});
 
   const handleTempAdjust = (delta: number) => {
     if (controlsDisabled || !power) return;
-    const nextTemp = clampTemperature(temp + delta);
-    if (nextTemp !== temp) {
+    const nextTemp = Math.max(
+      effectiveMinTemp,
+      clampTemperature(displayTemp + delta)
+    );
+    if (nextTemp !== displayTemp) {
       onDispatchStateChange(activeAppliance.id, { temp: nextTemp }, 'Web');
     }
   };
@@ -484,7 +495,7 @@ export function UniversalACController({
               whileTap={{ scale: 0.94 }}
               type="button"
               aria-label="Turunkan suhu AC"
-              disabled={controlsDisabled || !power || temp <= MIN_AC_TEMP}
+              disabled={controlsDisabled || !power || displayTemp <= effectiveMinTemp}
               onClick={() => handleTempAdjust(-1)}
               className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950/90 flex items-center justify-center text-slate-800 dark:text-zinc-100 hover:border-sky-500/50 disabled:opacity-40 transition-colors shadow-xs shrink-0"
             >
@@ -529,7 +540,7 @@ export function UniversalACController({
                 <div className="h-16 sm:h-20 flex items-center justify-center overflow-hidden">
                   <AnimatePresence mode="popLayout" initial={false}>
                     <motion.span
-                      key={power ? temp : 'off'}
+                      key={power ? displayTemp : 'off'}
                       initial={{ y: 16, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       exit={{ y: -16, opacity: 0 }}
@@ -540,13 +551,13 @@ export function UniversalACController({
                           : 'text-slate-400 dark:text-zinc-600'
                       }`}
                     >
-                      {power ? `${temp}°C` : 'OFF'}
+                      {power ? `${displayTemp}°C` : 'OFF'}
                     </motion.span>
                   </AnimatePresence>
                 </div>
 
                 <span className="text-[11px] font-mono tabular-nums text-slate-400 dark:text-zinc-500">
-                  16°C – 30°C
+                  {effectiveMinTemp}°C – {MAX_AC_TEMP}°C
                 </span>
               </div>
             </div>
@@ -555,7 +566,7 @@ export function UniversalACController({
               whileTap={{ scale: 0.94 }}
               type="button"
               aria-label="Naikkan suhu AC"
-              disabled={controlsDisabled || !power || temp >= MAX_AC_TEMP}
+              disabled={controlsDisabled || !power || displayTemp >= MAX_AC_TEMP}
               onClick={() => handleTempAdjust(1)}
               className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950/90 flex items-center justify-center text-slate-800 dark:text-zinc-100 hover:border-sky-500/50 disabled:opacity-40 transition-colors shadow-xs shrink-0"
             >
@@ -570,15 +581,17 @@ export function UniversalACController({
             }`}
           >
             <div className="w-full sm:max-w-xs flex items-center gap-3">
-              <span className="text-xs font-mono tabular-nums text-slate-500">16°</span>
+              <span className="text-xs font-mono tabular-nums text-slate-500">
+                {effectiveMinTemp}°
+              </span>
               <input
                 type="range"
                 aria-label="Geser suhu target AC"
-                min={MIN_AC_TEMP}
+                min={effectiveMinTemp}
                 max={MAX_AC_TEMP}
                 step={1}
                 disabled={controlsDisabled || !power}
-                value={temp}
+                value={displayTemp}
                 onChange={(e) =>
                   onDispatchStateChange(
                     activeAppliance.id,

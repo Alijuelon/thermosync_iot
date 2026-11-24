@@ -45,6 +45,7 @@ export async function GET() {
       esp32Nodes: dbSnapshot.esp32Nodes || [],
       appliances: dbSnapshot.appliances || [],
       commands: dbSnapshot.commands || [],
+      learnedIrCodes: dbSnapshot.learnedIrCodes || [],
     });
   }
 
@@ -60,6 +61,7 @@ export async function GET() {
     esp32Nodes: [],
     appliances: [],
     commands: [],
+    learnedIrCodes: [],
   });
 }
 
@@ -150,15 +152,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 1B. Hardware Node Command (reset_energy / learn_ir) for final ESP8266 firmware
+    // 1B. Hardware Node Command (reset_energy / learn_ir / test_ir) for ESP8266 v2.8.1
     if (action === 'hardware_command') {
       const { esp32Id, esp32Name, firmwareCommand } = body as {
         esp32Id: string;
         esp32Name?: string;
-        firmwareCommand: 'reset_energy' | 'learn_ir';
+        firmwareCommand: 'reset_energy' | 'learn_ir' | 'test_ir';
       };
 
-      if (!esp32Id || (firmwareCommand !== 'reset_energy' && firmwareCommand !== 'learn_ir')) {
+      if (
+        !esp32Id ||
+        (firmwareCommand !== 'reset_energy' &&
+          firmwareCommand !== 'learn_ir' &&
+          firmwareCommand !== 'test_ir')
+      ) {
         return NextResponse.json(
           { error: 'Perintah hardware tidak valid' },
           { status: 400 }
@@ -172,20 +179,26 @@ export async function POST(req: NextRequest) {
         esp32Name: esp32Name || esp32Id,
         applianceId: '',
         applianceName:
-          firmwareCommand === 'reset_energy' ? 'PZEM-004T v4.0' : 'IR Receiver D6',
-        source: firmwareCommand === 'learn_ir' ? 'Scanner' : 'Web',
+          firmwareCommand === 'reset_energy'
+            ? 'PZEM-004T v4.0'
+            : firmwareCommand === 'test_ir'
+            ? 'IR Transmitter D2'
+            : 'IR Receiver D6',
+        source: firmwareCommand === 'reset_energy' ? 'Web' : 'Scanner',
         actionSummary:
           firmwareCommand === 'reset_energy'
             ? 'Reset Energi Kumulatif (kWh -> 0)'
+            : firmwareCommand === 'test_ir'
+            ? 'Kirim Sinyal Uji IR Langsung (D2)'
             : 'Aktifkan Mode Learning IR (D6)',
         payload: {
-          power: false,
+          power: true,
           temp: 24,
           mode: 'cool',
           fan: 'auto',
           swing: false,
-          protocol: 'DAIKIN',
-          protocolBits: 216,
+          protocol: 'COOLIX',
+          protocolBits: 24,
           freqKhz: 38,
           gpioTx: 23,
           iracClass: 'IRac',
@@ -195,6 +208,78 @@ export async function POST(req: NextRequest) {
       };
 
       const cmdRes = await insertCommandInSupabase(command, firmwareCommand);
+      return NextResponse.json({
+        ok: cmdRes.ok,
+        persisted: cmdRes.ok,
+        error: cmdRes.error,
+        command,
+      });
+    }
+
+    // 1C. Real IR Scanner Test Signal -> inserts real pending set_ac command to Supabase for ESP8266 execution
+    if (action === 'test_ir_signal') {
+      const {
+        esp32Id,
+        esp32Name,
+        brand,
+        protocol,
+        bits = 24,
+        power = true,
+        temp = 24,
+        mode = 'cool',
+        fan = 'auto',
+        swing = false,
+        label,
+      } = body as {
+        esp32Id: string;
+        esp32Name?: string;
+        brand: string;
+        protocol: string;
+        bits?: number;
+        power?: boolean;
+        temp?: number;
+        mode?: 'cool' | 'dry' | 'fan' | 'auto';
+        fan?: 'auto' | 'low' | 'med' | 'high';
+        swing?: boolean;
+        label?: string;
+      };
+
+      if (!esp32Id || !protocol) {
+        return NextResponse.json(
+          { error: 'esp32Id dan protocol wajib diisi untuk uji IR.' },
+          { status: 400 }
+        );
+      }
+
+      const safeTemp = Math.min(30, Math.max(17, Math.round(temp)));
+      const nowIso = new Date().toISOString();
+      const command: DeviceCommand = {
+        id: `cmd-test-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        esp32Id,
+        esp32Name: esp32Name || esp32Id,
+        applianceId: '',
+        applianceName: `Tes Scanner (${brand || protocol})`,
+        source: 'Scanner',
+        actionSummary:
+          label ||
+          `Tes IR ${protocol} · ${power ? 'ON' : 'OFF'} · ${safeTemp}°C`,
+        payload: {
+          power,
+          temp: safeTemp,
+          mode,
+          fan,
+          swing,
+          protocol: protocol.toUpperCase(),
+          protocolBits: bits,
+          freqKhz: 38,
+          gpioTx: 23,
+          iracClass: 'IRac',
+        },
+        status: 'pending',
+        createdAt: nowIso,
+      };
+
+      const cmdRes = await insertCommandInSupabase(command, 'set_ac');
       return NextResponse.json({
         ok: cmdRes.ok,
         persisted: cmdRes.ok,

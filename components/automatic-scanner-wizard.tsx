@@ -12,6 +12,7 @@ import {
   Sparkles,
   AlertTriangle,
   Search,
+  Loader2,
 } from 'lucide-react';
 import {
   AC_BRANDS,
@@ -20,17 +21,31 @@ import {
   getProtocolsByBrand,
   getIrChannelInfo,
   detectSamePinBrandCollision,
+  matchCapturedProtocolToProfile,
+  formatLastSeenLabel,
   type ESP32Node,
   type ACAppliance,
   type IRProtocolProfile,
   type IrTxPin,
+  type LearnedIrCode,
 } from '@/lib/iot-engine';
 
 interface AutomaticScannerWizardProps {
   esp32Nodes: ESP32Node[];
   appliances: ACAppliance[];
+  learnedIrCodes?: LearnedIrCode[];
   initialEsp32Id?: string;
   nowMs: number;
+  onTriggerLearnIr?: (esp32Id: string) => Promise<void>;
+  onSendTestIrSignal?: (params: {
+    esp32Id: string;
+    brand: string;
+    protocol: string;
+    bits: number;
+    power: boolean;
+    temp: number;
+    label: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
   onSaveScannedAppliance: (params: {
     esp32Id: string;
     name: string;
@@ -47,8 +62,11 @@ type MainScannerMethod = 'ir_remote' | 'smart_bruteforce';
 export function AutomaticScannerWizard({
   esp32Nodes,
   appliances,
+  learnedIrCodes = [],
   initialEsp32Id,
   nowMs,
+  onTriggerLearnIr,
+  onSendTestIrSignal,
   onSaveScannedAppliance,
 }: AutomaticScannerWizardProps) {
   const onlineNodes = esp32Nodes.filter((n) => isEsp32Online(n.lastSeen, nowMs));
@@ -60,16 +78,18 @@ export function AutomaticScannerWizard({
     useState<MainScannerMethod>('ir_remote');
 
   const [isListeningIr, setIsListeningIr] = useState<boolean>(true);
+  const [isSendingTest, setIsSendingTest] = useState<boolean>(false);
+  const [isActivatingLearn, setIsActivatingLearn] = useState<boolean>(false);
   const [detectedProfile, setDetectedProfile] =
     useState<IRProtocolProfile | null>(null);
 
-  const [selectedBrand, setSelectedBrand] = useState<string>('Daikin');
+  const [selectedBrand, setSelectedBrand] = useState<string>('Midea (SKEM)');
   const [brandSearchQuery, setBrandSearchQuery] = useState<string>('');
   const [bruteforceIndex, setBruteforceIndex] = useState<number>(0);
   const [lastFiredSignalText, setLastFiredSignalText] = useState<string>('');
 
   const [testPowerState, setTestPowerState] = useState<boolean>(true);
-  const [testTempState, setTestTempState] = useState<number>(22);
+  const [testTempState, setTestTempState] = useState<number>(24);
   const [testFeedback, setTestFeedback] = useState<string>('');
   const [applianceName, setApplianceName] = useState<string>('');
   const [nameError, setNameError] = useState<string>('');
@@ -79,6 +99,11 @@ export function AutomaticScannerWizard({
     ? isEsp32Online(selectedHub.lastSeen, nowMs)
     : false;
   const selectedChannelInfo = getIrChannelInfo(selectedIrTxPin);
+
+  const latestNodeIrCapture =
+    learnedIrCodes.find(
+      (code) => !selectedEsp32Id || code.nodeId === selectedEsp32Id
+    ) || learnedIrCodes[0] || null;
 
   const filteredBrands = AC_BRANDS.filter((b) =>
     b.toLowerCase().includes(brandSearchQuery.trim().toLowerCase())
@@ -120,6 +145,32 @@ export function AutomaticScannerWizard({
     setTestFeedback('');
   };
 
+  const handleUseRealCapturedIr = (captured: LearnedIrCode) => {
+    const matched = matchCapturedProtocolToProfile(
+      captured.protocol,
+      captured.bits,
+      captured.rawHex
+    );
+    setDetectedProfile(matched);
+    setIsListeningIr(false);
+    setApplianceName(`AC ${matched.brand}`);
+    setNameError('');
+    setTestFeedback(
+      `Menggunakan protokol asli hasil scan D6: ${matched.protocol} (${matched.bits}-bit)`
+    );
+  };
+
+  const handleActivateHardwareLearn = async () => {
+    if (!selectedEsp32Id || !onTriggerLearnIr) return;
+    setIsActivatingLearn(true);
+    try {
+      await onTriggerLearnIr(selectedEsp32Id);
+      setIsListeningIr(true);
+    } finally {
+      setIsActivatingLearn(false);
+    }
+  };
+
   const handleConfirmBruteforceProfile = (profile: IRProtocolProfile) => {
     setDetectedProfile(profile);
     setApplianceName(`AC ${profile.brand}`);
@@ -127,9 +178,69 @@ export function AutomaticScannerWizard({
     setTestFeedback('');
   };
 
-  const handleFireTestCommand = (label: string) => {
+  const handleSendBruteforceTest = async (profile: IRProtocolProfile) => {
+    if (!selectedEsp32Id || !onSendTestIrSignal) {
+      setLastFiredSignalText(
+        `Sinyal tes ${profile.protocol} dikirim ke AC ${profile.brand}...`
+      );
+      return;
+    }
+    setIsSendingTest(true);
+    setLastFiredSignalText(
+      `Mengirim sinyal IR nyata (${profile.protocol} · 24°C ON) ke ESP8266...`
+    );
+    try {
+      const res = await onSendTestIrSignal({
+        esp32Id: selectedEsp32Id,
+        brand: profile.brand,
+        protocol: profile.protocol,
+        bits: profile.bits,
+        power: true,
+        temp: 24,
+        label: `Tes Scanner ${profile.brand} (${profile.protocol} · ON 24°C)`,
+      });
+      setLastFiredSignalText(
+        res.ok
+          ? `Perintah IR ${profile.protocol} (${profile.bits}-bit) terkirim ke ESP8266! Tunggu 1–3 detik (LED merah D3 berkedip saat dipancarkan).`
+          : res.error || 'Gagal mengirim sinyal tes ke Supabase.'
+      );
+    } finally {
+      setIsSendingTest(false);
+    }
+  };
+
+  const handleFireTestCommand = async (
+    label: string,
+    overridePower?: boolean,
+    overrideTemp?: number
+  ) => {
     if (!detectedProfile) return;
-    setTestFeedback(`Sinyal ${label} terkirim ke AC ${detectedProfile.brand}`);
+    const powerVal = overridePower ?? testPowerState;
+    const tempVal = overrideTemp ?? testTempState;
+    if (!selectedEsp32Id || !onSendTestIrSignal) {
+      setTestFeedback(`Sinyal ${label} terkirim ke AC ${detectedProfile.brand}`);
+      return;
+    }
+    setIsSendingTest(true);
+    setTestFeedback(`Mengirim ${label} (${detectedProfile.protocol}) ke ESP8266...`);
+    try {
+      const res = await onSendTestIrSignal({
+        esp32Id: selectedEsp32Id,
+        brand: detectedProfile.brand,
+        protocol: detectedProfile.protocol,
+        bits: detectedProfile.bits,
+        power: powerVal,
+        temp: tempVal,
+        label: `Uji ${detectedProfile.brand} (${detectedProfile.protocol}): ${label}`,
+      });
+      setTestFeedback(
+        res.ok
+          ? `${label} (${detectedProfile.protocol}) terkirim ke ESP8266! Cek respon AC dalam 1–3 detik.`
+          : res.error || 'Gagal mengirim sinyal ke Supabase.'
+      );
+    } finally {
+      setIsSendingTest(false);
+    }
   };
 
   const handleSubmitNewAppliance = (e: React.FormEvent) => {
@@ -344,11 +455,58 @@ export function AutomaticScannerWizard({
             <p className="mt-2 text-sm font-bold text-slate-900 dark:text-zinc-100 text-center">
               {detectedProfile && !isListeningIr
                 ? `AC ${detectedProfile.brand} Terdeteksi`
+                : latestNodeIrCapture
+                ? `Scan D6: ${latestNodeIrCapture.protocol} (${latestNodeIrCapture.bits}-bit)`
                 : 'Menunggu Sinyal Remote...'}
             </p>
             <p className="text-xs text-slate-500 dark:text-zinc-400 text-center mt-1">
-              Arahkan remote asli ke sensor penerima lalu tekan tombol Power.
+              Arahkan remote asli ke sensor penerima D6 (VS1838B) lalu tekan
+              tombol Power.
             </p>
+
+            {latestNodeIrCapture && (
+              <div className="mt-3 w-full rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-left space-y-2">
+                <div className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                    Hasil Scan Asli D6
+                  </span>
+                  <span className="text-slate-500 dark:text-zinc-400">
+                    {formatLastSeenLabel(latestNodeIrCapture.createdAt, nowMs)}
+                  </span>
+                </div>
+                <p className="text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 break-all">
+                  {latestNodeIrCapture.protocol} · {latestNodeIrCapture.bits}-bit
+                </p>
+                {latestNodeIrCapture.rawHex && (
+                  <p className="text-[11px] font-mono text-slate-600 dark:text-zinc-400 truncate">
+                    HEX: {latestNodeIrCapture.rawHex}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleUseRealCapturedIr(latestNodeIrCapture)}
+                  className="w-full h-8 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold transition-colors"
+                >
+                  Gunakan Hasil Scan D6
+                </button>
+              </div>
+            )}
+
+            {onTriggerLearnIr && (
+              <button
+                type="button"
+                disabled={!selectedHubOnline || isActivatingLearn}
+                onClick={handleActivateHardwareLearn}
+                className="mt-3 w-full h-9 inline-flex items-center justify-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 hover:bg-sky-500/15 text-sky-600 dark:text-sky-400 text-xs font-bold disabled:opacity-45 transition-colors"
+              >
+                {isActivatingLearn ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Radio className="w-3.5 h-3.5" />
+                )}
+                <span>Aktifkan Mode Scan D6</span>
+              </button>
+            )}
           </section>
 
           {/* Card Simulasi / Tangkap Sinyal Remote Semua Merek */}
@@ -451,11 +609,14 @@ export function AutomaticScannerWizard({
                     <div>
                       <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold">
                         Opsi Sinyal {bruteforceIndex + 1} dari{' '}
-                        {brandCandidates.length}
+                        {brandCandidates.length} · Protokol {activeBruteforceProfile.protocol} ({activeBruteforceProfile.bits}-bit)
                       </span>
                       <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100 mt-0.5">
                         Profil {selectedBrand} #{bruteforceIndex + 1}
                       </h3>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                        {activeBruteforceProfile.modelSeries}
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -503,14 +664,17 @@ export function AutomaticScannerWizard({
                     <motion.button
                       whileTap={{ scale: 0.96 }}
                       type="button"
+                      disabled={!selectedHubOnline || isSendingTest}
                       onClick={() =>
-                        setLastFiredSignalText(
-                          `Sinyal tes dikirim ke AC ${selectedBrand}...`
-                        )
+                        void handleSendBruteforceTest(activeBruteforceProfile)
                       }
-                      className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-950 px-4 text-xs font-bold text-slate-800 dark:text-zinc-100"
+                      className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-950 hover:border-amber-500/60 px-4 text-xs font-bold text-slate-800 dark:text-zinc-100 disabled:opacity-45"
                     >
-                      <Zap className="w-4 h-4 text-amber-500" />
+                      {isSendingTest ? (
+                        <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+                      ) : (
+                        <Zap className="w-4 h-4 text-amber-500" />
+                      )}
                       <span>Kirim Tes Nyala</span>
                     </motion.button>
 
@@ -608,12 +772,17 @@ export function AutomaticScannerWizard({
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
+                  disabled={!selectedHubOnline || isSendingTest}
                   onClick={() => {
                     const next = !testPowerState;
                     setTestPowerState(next);
-                    handleFireTestCommand(next ? 'Power ON' : 'Power OFF');
+                    void handleFireTestCommand(
+                      next ? 'Power ON' : 'Power OFF',
+                      next,
+                      testTempState
+                    );
                   }}
-                  className={`h-10 inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 text-xs font-bold transition-colors ${
+                  className={`h-10 inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 text-xs font-bold transition-colors disabled:opacity-45 ${
                     testPowerState
                       ? 'bg-emerald-500 text-zinc-950 shadow-xs'
                       : 'bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200'
@@ -625,24 +794,28 @@ export function AutomaticScannerWizard({
 
                 <button
                   type="button"
+                  disabled={!selectedHubOnline || isSendingTest}
                   onClick={() => {
-                    const next = Math.max(16, testTempState - 1);
+                    const next = Math.max(17, testTempState - 1);
                     setTestTempState(next);
-                    handleFireTestCommand(`Suhu ${next}°C`);
+                    setTestPowerState(true);
+                    void handleFireTestCommand(`Suhu ${next}°C`, true, next);
                   }}
-                  className="h-10 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-sky-500/50 px-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 transition-colors"
+                  className="h-10 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-sky-500/50 px-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 disabled:opacity-45 transition-colors"
                 >
                   - Dinginkan
                 </button>
 
                 <button
                   type="button"
+                  disabled={!selectedHubOnline || isSendingTest}
                   onClick={() => {
                     const next = Math.min(30, testTempState + 1);
                     setTestTempState(next);
-                    handleFireTestCommand(`Suhu ${next}°C`);
+                    setTestPowerState(true);
+                    void handleFireTestCommand(`Suhu ${next}°C`, true, next);
                   }}
-                  className="h-10 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-sky-500/50 px-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 transition-colors"
+                  className="h-10 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-sky-500/50 px-2.5 text-xs font-bold text-slate-700 dark:text-zinc-200 disabled:opacity-45 transition-colors"
                 >
                   + Naikkan
                 </button>

@@ -65,7 +65,9 @@ interface DevicesManagementProps {
   onAddApplianceManual: (params: {
     name: string;
     esp32Id: string;
+    brand?: string;
     protocol: string;
+    protocolBits?: number;
     irTxPin: IrTxPin;
   }) => void;
   onUpdateAppliance: (
@@ -73,7 +75,9 @@ interface DevicesManagementProps {
     updates: {
       name: string;
       esp32Id: string;
+      brand?: string;
       protocol: string;
+      protocolBits?: number;
       irTxPin: IrTxPin;
     }
   ) => void;
@@ -122,7 +126,9 @@ export function DevicesManagement({
   );
   const [formAcName, setFormAcName] = useState<string>('');
   const [formAcEsp32Id, setFormAcEsp32Id] = useState<string>('');
-  const [formAcProtocol, setFormAcProtocol] = useState<string>('DAIKIN');
+  const [formAcProfileId, setFormAcProfileId] = useState<string>(
+    IR_PROTOCOL_CATALOG[0].id
+  );
   const [formAcIrTxPin, setFormAcIrTxPin] = useState<IrTxPin>(23);
   const [acFormError, setAcFormError] = useState<string>('');
 
@@ -184,7 +190,7 @@ export function DevicesManagement({
     setEditingApplianceId(null);
     setFormAcName('');
     setFormAcEsp32Id(defaultEsp32Id || esp32Nodes[0]?.id || '');
-    setFormAcProtocol('DAIKIN');
+    setFormAcProfileId(IR_PROTOCOL_CATALOG[0].id);
     setFormAcIrTxPin(23);
     setAcFormError('');
   };
@@ -194,13 +200,21 @@ export function DevicesManagement({
     setEditingApplianceId(app.id);
     setFormAcName(app.name);
     setFormAcEsp32Id(app.esp32Id);
-    setFormAcProtocol(app.protocol);
+    const exactMatch =
+      IR_PROTOCOL_CATALOG.find(
+        (p) =>
+          p.brand.toLowerCase() === app.brand.toLowerCase() &&
+          p.protocol === app.protocol
+      ) ||
+      IR_PROTOCOL_CATALOG.find((p) => p.protocol === app.protocol) ||
+      IR_PROTOCOL_CATALOG[0];
+    setFormAcProfileId(exactMatch.id);
     setFormAcIrTxPin(app.irTxPin || 23);
     setAcFormError('');
   };
 
   const selectedProtoProfile =
-    IR_PROTOCOL_CATALOG.find((p) => p.protocol === formAcProtocol) ||
+    IR_PROTOCOL_CATALOG.find((p) => p.id === formAcProfileId) ||
     IR_PROTOCOL_CATALOG[0];
 
   const formCollisionAppliance =
@@ -208,7 +222,7 @@ export function DevicesManagement({
       ? detectSamePinBrandCollision(appliances, {
           esp32Id: formAcEsp32Id,
           brand: selectedProtoProfile.brand,
-          protocol: formAcProtocol,
+          protocol: selectedProtoProfile.protocol,
           irTxPin: formAcIrTxPin,
           excludeApplianceId: editingApplianceId || undefined,
         })
@@ -226,14 +240,18 @@ export function DevicesManagement({
       onAddApplianceManual({
         name: formAcName.trim(),
         esp32Id: formAcEsp32Id,
-        protocol: formAcProtocol,
+        brand: selectedProtoProfile.brand,
+        protocol: selectedProtoProfile.protocol,
+        protocolBits: selectedProtoProfile.bits,
         irTxPin: formAcIrTxPin,
       });
     } else if (acModalMode === 'edit' && editingApplianceId) {
       onUpdateAppliance(editingApplianceId, {
         name: formAcName.trim(),
         esp32Id: formAcEsp32Id,
-        protocol: formAcProtocol,
+        brand: selectedProtoProfile.brand,
+        protocol: selectedProtoProfile.protocol,
+        protocolBits: selectedProtoProfile.bits,
         irTxPin: formAcIrTxPin,
       });
     }
@@ -723,12 +741,12 @@ export function DevicesManagement({
                 </label>
                 <select
                   id="form-ac-protocol"
-                  value={formAcProtocol}
-                  onChange={(e) => setFormAcProtocol(e.target.value)}
+                  value={formAcProfileId}
+                  onChange={(e) => setFormAcProfileId(e.target.value)}
                   className="w-full min-h-[42px] rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 text-sm font-mono"
                 >
                   {IR_PROTOCOL_CATALOG.map((p) => (
-                    <option key={p.id} value={p.protocol}>
+                    <option key={p.id} value={p.id}>
                       {p.brand} — {p.protocol} ({p.bits}-bit)
                     </option>
                   ))}

@@ -9,6 +9,7 @@ import {
   type FanSpeed,
   type FullStateIRPayload,
   type IrTxPin,
+  type LearnedIrCode,
   type TelemetryPoint,
 } from '@/lib/iot-engine';
 import { getSupabaseServerClient } from '@/lib/supabase';
@@ -94,6 +95,15 @@ export interface DbDeviceCommandRow {
   latency_ms?: number | null;
   created_at: string;
   executed_at?: string | null;
+}
+
+export interface DbIrLearnedCodeRow {
+  id: number | string;
+  node_id: string;
+  protocol: string;
+  raw_hex?: string | null;
+  bits?: number | null;
+  created_at: string;
 }
 
 export function normalizeIrTxPin(pin: number | undefined | null): IrTxPin {
@@ -432,9 +442,16 @@ export function mapDbCommandToDomain(row: DbDeviceCommandRow): DeviceCommand {
   };
 }
 
+export type FirmwareCommandAction =
+  | 'set_ac'
+  | 'power'
+  | 'learn_ir'
+  | 'test_ir'
+  | 'reset_energy';
+
 export function mapDomainCommandToDb(
   cmd: DeviceCommand,
-  firmwareCommand: 'set_ac' | 'power' | 'learn_ir' | 'reset_energy' = 'set_ac'
+  firmwareCommand: FirmwareCommandAction = 'set_ac'
 ): DbDeviceCommandRow {
   return {
     id: cmd.id,
@@ -470,33 +487,45 @@ export interface SupabaseSnapshotResult {
   esp32Nodes?: ESP32Node[];
   appliances?: ACAppliance[];
   commands?: DeviceCommand[];
+  learnedIrCodes?: LearnedIrCode[];
 }
 
 export async function fetchAllFromSupabase(): Promise<SupabaseSnapshotResult> {
   try {
     const supabase = getSupabaseServerClient();
-    const [nodesRes, deviceNodesRes, telemetryLogsRes, appsRes, cmdsRes] =
-      await Promise.all([
-        supabase
-          .from('esp32_nodes')
-          .select('*')
-          .order('created_at', { ascending: true }),
-        supabase.from('device_nodes').select('*'),
-        supabase
-          .from('telemetry_logs')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(40),
-        supabase
-          .from('ac_appliances')
-          .select('*')
-          .order('created_at', { ascending: true }),
-        supabase
-          .from('device_commands')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(50),
-      ]);
+    const [
+      nodesRes,
+      deviceNodesRes,
+      telemetryLogsRes,
+      appsRes,
+      cmdsRes,
+      learnedIrRes,
+    ] = await Promise.all([
+      supabase
+        .from('esp32_nodes')
+        .select('*')
+        .order('created_at', { ascending: true }),
+      supabase.from('device_nodes').select('*'),
+      supabase
+        .from('telemetry_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(40),
+      supabase
+        .from('ac_appliances')
+        .select('*')
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('device_commands')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase
+        .from('ir_learned_codes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10),
+    ]);
 
     const coreError = nodesRes.error && deviceNodesRes.error ? nodesRes.error : null;
     if (coreError) {
@@ -520,6 +549,17 @@ export async function fetchAllFromSupabase(): Promise<SupabaseSnapshotResult> {
       telemetryLogs: (telemetryLogsRes.data || []) as DbTelemetryLogRow[],
     });
 
+    const learnedIrCodes: LearnedIrCode[] = (
+      (learnedIrRes.data || []) as DbIrLearnedCodeRow[]
+    ).map((row) => ({
+      id: String(row.id),
+      nodeId: row.node_id,
+      protocol: row.protocol || 'UNKNOWN',
+      rawHex: row.raw_hex || '',
+      bits: Number(row.bits ?? 0),
+      createdAt: row.created_at,
+    }));
+
     return {
       connected: true,
       schemaReady: true,
@@ -530,6 +570,7 @@ export async function fetchAllFromSupabase(): Promise<SupabaseSnapshotResult> {
       commands: ((cmdsRes.data || []) as DbDeviceCommandRow[]).map(
         mapDbCommandToDomain
       ),
+      learnedIrCodes,
     };
   } catch (err: unknown) {
     return {
@@ -614,7 +655,7 @@ export async function deleteApplianceInSupabase(applianceId: string): Promise<{ 
 
 export async function insertCommandInSupabase(
   cmd: DeviceCommand,
-  firmwareCommand: 'set_ac' | 'power' | 'learn_ir' | 'reset_energy' = 'set_ac'
+  firmwareCommand: FirmwareCommandAction = 'set_ac'
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const supabase = getSupabaseServerClient();

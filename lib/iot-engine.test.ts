@@ -15,6 +15,8 @@ import {
   getActiveChannelsForHub,
   hasMultipleActiveChannels,
   detectSamePinBrandCollision,
+  AC_BRANDS,
+  matchCapturedProtocolToProfile,
   hasDuplicateProtocolInHub,
 } from './iot-engine';
 
@@ -162,3 +164,23 @@ test('PRD v1.1: Multi-AC & Multi-Channel IR TX helpers detect active channels, b
   });
   assert.equal(noCollision, null);
 });
+
+test('AC brand catalog includes Midea (SKEM) with COOLIX 24-bit primary and MIDEA 48-bit secondary profiles', () => {
+  assert.ok(AC_BRANDS.includes('Midea (SKEM)'));
+  const skemProfiles = getProtocolsByBrand('Midea (SKEM)');
+  assert.equal(skemProfiles.length, 2);
+  assert.equal(skemProfiles[0].protocol, 'COOLIX');
+  assert.equal(skemProfiles[0].bits, 24);
+  assert.equal(skemProfiles[1].protocol, 'MIDEA');
+  assert.equal(skemProfiles[1].bits, 48);
+
+  const capturedMidea = matchCapturedProtocolToProfile('MIDEA', 48, '0xA1826FFFFF6C');
+  assert.equal(capturedMidea.brand, 'Midea (SKEM)');
+  assert.equal(capturedMidea.protocol, 'MIDEA');
+
+  const capturedCoolix = matchCapturedProtocolToProfile('COOLIX', 24, '0xB2BF40');
+  assert.equal(capturedCoolix.brand, 'Midea (SKEM)');
+  assert.equal(capturedCoolix.protocol, 'COOLIX');
+  assert.equal(capturedCoolix.bits, 24);
+});
+
